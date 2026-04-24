@@ -14,9 +14,13 @@ CONF_API_KEY = "api_key"
 CONF_TEAM_ID = "team_id"
 CONF_TEAM_NAME = "team_name"
 
-# Update intervals (seconds)
-SCAN_INTERVAL_LIVE = 30
-SCAN_INTERVAL_IDLE = 300
+# Polling intervals (seconds)
+SCAN_INTERVAL_LIVE = 30          # Game in progress
+SCAN_INTERVAL_PRE = 300          # Game today, not yet started
+SCAN_INTERVAL_FINAL = 900        # Game just ended (catches late stat corrections)
+SCAN_INTERVAL_GAME_SOON = 900    # Next game < 6 hours away
+SCAN_INTERVAL_GAME_TODAY = 1800  # Next game < 24 hours away
+SCAN_INTERVAL_IDLE = 7200        # Next game is tomorrow or later
 
 # Game states
 GAME_STATE_PRE = "PRE"

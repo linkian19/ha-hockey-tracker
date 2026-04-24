@@ -21,15 +21,19 @@ from .const import (
     GAME_STATE_NONE,
     GAME_STATE_PRE,
     HOCKEYTECH_BASE,
+    SCAN_INTERVAL_FINAL,
+    SCAN_INTERVAL_GAME_SOON,
+    SCAN_INTERVAL_GAME_TODAY,
     SCAN_INTERVAL_IDLE,
     SCAN_INTERVAL_LIVE,
+    SCAN_INTERVAL_PRE,
 )
 
 _LOGGER = logging.getLogger(__name__)
 
 
 class EchlCoordinator(DataUpdateCoordinator[dict[str, Any]]):
-    """Polls HockeyTech for ECHL game data, adjusting interval based on game state."""
+    """Polls HockeyTech for ECHL game data with adaptive update intervals."""
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         self.api_key: str = entry.data[CONF_API_KEY]
@@ -49,13 +53,47 @@ class EchlCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except aiohttp.ClientError as err:
             raise UpdateFailed(f"HockeyTech request failed: {err}") from err
 
-        # Speed up polling when a game is live
-        if data.get("game_state") == GAME_STATE_LIVE:
-            self.update_interval = timedelta(seconds=SCAN_INTERVAL_LIVE)
-        else:
-            self.update_interval = timedelta(seconds=SCAN_INTERVAL_IDLE)
-
+        self.update_interval = timedelta(seconds=self._next_interval(data))
+        _LOGGER.debug(
+            "Next poll in %s seconds (game_state=%s)",
+            self.update_interval.total_seconds(),
+            data.get("game_state"),
+        )
         return data
+
+    def _next_interval(self, data: dict) -> int:
+        """Choose poll interval based on game state and time until next game."""
+        state = data.get("game_state")
+
+        if state == GAME_STATE_LIVE:
+            return SCAN_INTERVAL_LIVE
+
+        if state == GAME_STATE_PRE:
+            return SCAN_INTERVAL_PRE
+
+        if state == GAME_STATE_FINAL:
+            return SCAN_INTERVAL_FINAL
+
+        # NO_GAME — base interval on time until the next game
+        next_game = data.get("next_game")
+        if next_game and next_game.get("game_date"):
+            hours_away = self._hours_until(next_game["game_date"])
+            if hours_away is not None:
+                if hours_away <= 6:
+                    return SCAN_INTERVAL_GAME_SOON
+                if hours_away <= 24:
+                    return SCAN_INTERVAL_GAME_TODAY
+
+        return SCAN_INTERVAL_IDLE
+
+    @staticmethod
+    def _hours_until(iso_date: str) -> float | None:
+        try:
+            game_dt = datetime.fromisoformat(iso_date)
+            delta = game_dt - datetime.now(timezone.utc)
+            return delta.total_seconds() / 3600
+        except (ValueError, TypeError):
+            return None
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
@@ -71,14 +109,15 @@ class EchlCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         }
         base_params.update(params)
         session = await self._get_session()
-        async with session.get(HOCKEYTECH_BASE, params=base_params, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+        async with session.get(
+            HOCKEYTECH_BASE,
+            params=base_params,
+            timeout=aiohttp.ClientTimeout(total=15),
+        ) as resp:
             resp.raise_for_status()
             return await resp.json(content_type=None)
 
     async def _fetch_team_game_data(self) -> dict[str, Any]:
-        """Fetch scorebar data and return normalized game state dict."""
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-
         scorebar = await self._fetch({
             "feed": "modulekit",
             "view": "scorebar",
@@ -90,7 +129,6 @@ class EchlCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         team_game = self._find_team_game(games)
 
         if team_game is None:
-            # No game today/soon — fetch next upcoming game
             next_game = await self._fetch_next_game()
             return {**self._empty_state(), "next_game": next_game}
 
@@ -115,7 +153,7 @@ class EchlCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             games = result.get("SiteKit", {}).get("Schedule", [])
             now = datetime.now(timezone.utc)
             upcoming = [g for g in games if self._parse_game_dt(g) >= now]
-            upcoming.sort(key=lambda g: self._parse_game_dt(g))
+            upcoming.sort(key=self._parse_game_dt)
             if upcoming:
                 g = upcoming[0]
                 is_home = str(g.get("home_team")) == self.team_id
@@ -159,11 +197,11 @@ class EchlCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "start_time": game.get("GameDateISO8601"),
             "period": game.get("Period"),
             "clock": game.get("GameClock"),
-            "home_team": game.get("HomeCity", "") + " " + game.get("HomeNickname", ""),
+            "home_team": f"{game.get('HomeCity', '')} {game.get('HomeNickname', '')}".strip(),
             "home_team_id": game.get("HomeID"),
             "home_score": game.get("HomeGoals", 0),
             "home_shots": game.get("HomeShots", 0),
-            "away_team": game.get("VisitorCity", "") + " " + game.get("VisitorNickname", ""),
+            "away_team": f"{game.get('VisitorCity', '')} {game.get('VisitorNickname', '')}".strip(),
             "away_team_id": game.get("VisitorID"),
             "away_score": game.get("VisitorGoals", 0),
             "away_shots": game.get("VisitorShots", 0),
