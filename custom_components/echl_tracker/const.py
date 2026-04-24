@@ -21,5 +21,5 @@ GAME_STATE_LIVE = "LIVE"
 GAME_STATE_FINAL = "FINAL"
 GAME_STATE_NONE = "NO_GAME"
 
-# KC Mavericks team ID (to be confirmed once API is accessible)
-KC_MAVERICKS_TEAM_ID = "20"
+# KC Mavericks team ID (confirmed via HockeyTech scorebar API)
+KC_MAVERICKS_TEAM_ID = "68"
