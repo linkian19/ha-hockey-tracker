@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import logging
+import re
 from typing import Any
 
 import aiohttp
@@ -133,9 +134,9 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # and cannot be constructed from the team ID alone.
         for g in all_games:
             if g.get("HomeID") and g.get("HomeLogo"):
-                self._logo_cache[str(g["HomeID"])] = g["HomeLogo"]
+                self._logo_cache[str(g["HomeID"])] = self._upscale_ht_logo(g["HomeLogo"])
             if g.get("VisitorID") and g.get("VisitorLogo"):
-                self._logo_cache[str(g["VisitorID"])] = g["VisitorLogo"]
+                self._logo_cache[str(g["VisitorID"])] = self._upscale_ht_logo(g["VisitorLogo"])
 
         team_games = [
             g for g in all_games
@@ -233,12 +234,12 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "home_team_id": home_id,
             "home_score": game.get("HomeGoals", 0),
             "home_shots": game.get("HomeShots", 0),
-            "home_logo_url": game.get("HomeLogo") or self._logo_cache.get(home_id),
+            "home_logo_url": self._upscale_ht_logo(game.get("HomeLogo")) or self._logo_cache.get(home_id),
             "away_team": f"{game.get('VisitorCity','')} {game.get('VisitorNickname','')}".strip(),
             "away_team_id": away_id,
             "away_score": game.get("VisitorGoals", 0),
             "away_shots": game.get("VisitorShots", 0),
-            "away_logo_url": game.get("VisitorLogo") or self._logo_cache.get(away_id),
+            "away_logo_url": self._upscale_ht_logo(game.get("VisitorLogo")) or self._logo_cache.get(away_id),
             "is_home": is_home,
             "team_logo_url": self.team_logo_url,
             "venue": game.get("venue_name"),
@@ -253,9 +254,9 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             else f"{game.get('HomeCity','')} {game.get('HomeNickname','')}".strip()
         )
         opp_logo = (
-            (game.get("VisitorLogo") or self._logo_cache.get(opp_id))
+            (self._upscale_ht_logo(game.get("VisitorLogo")) or self._logo_cache.get(opp_id))
             if is_home
-            else (game.get("HomeLogo") or self._logo_cache.get(opp_id))
+            else (self._upscale_ht_logo(game.get("HomeLogo")) or self._logo_cache.get(opp_id))
         )
         home_goals = int(game.get("HomeGoals") or 0)
         away_goals = int(game.get("VisitorGoals") or 0)
@@ -279,6 +280,13 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return datetime.fromisoformat(raw)
         except (ValueError, TypeError):
             return datetime.min.replace(tzinfo=timezone.utc)
+
+    @staticmethod
+    def _upscale_ht_logo(url: str | None) -> str | None:
+        """Strip size subdirectory from HockeyTech CDN URLs to get full-res image."""
+        if not url:
+            return None
+        return re.sub(r"/logos/\d+x\d+/", "/logos/", url)
 
     async def _fetch_ht(self, params: dict[str, str]) -> dict[str, Any]:
         base = {
@@ -316,7 +324,7 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 abbrev = team.get("abbrev")
                 logo = team.get("logo")
                 if abbrev and logo:
-                    self._logo_cache[abbrev] = logo
+                    self._logo_cache[abbrev] = logo.replace("_dark.svg", "_light.svg")
 
         team_games = [
             g for g in all_games
@@ -368,7 +376,7 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     abbrev = team.get("abbrev")
                     logo = team.get("logo")
                     if abbrev and logo:
-                        self._logo_cache[abbrev] = logo
+                        self._logo_cache[abbrev] = logo.replace("_dark.svg", "_light.svg")
             return games
         except Exception as err:
             _LOGGER.debug("NHL schedule fetch failed: %s", err)
@@ -382,7 +390,7 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 abbrev = entry.get("teamAbbrev", {}).get("default", "")
                 logo = entry.get("teamLogo", "")
                 if abbrev and logo:
-                    self._logo_cache[abbrev] = logo
+                    self._logo_cache[abbrev] = logo.replace("_dark.svg", "_light.svg")
         except Exception as err:
             _LOGGER.debug("NHL logo cache refresh failed: %s", err)
 
@@ -483,13 +491,15 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Return the best available logo URL for an NHL team.
 
         Priority: direct URL from API response → standings/scoreboard cache →
-        constructed SVG URL as last resort.
+        constructed SVG URL as last resort. Always uses _light.svg variant so
+        logos are visible on light-themed HA dashboards.
         """
-        if direct_url:
-            return direct_url
+        url = direct_url or self._logo_cache.get(abbrev or "")
+        if url:
+            return url.replace("_dark.svg", "_light.svg")
         if not abbrev:
             return None
-        return self._logo_cache.get(abbrev) or f"https://assets.nhle.com/logos/nhl/svg/{abbrev}_dark.svg"
+        return f"https://assets.nhle.com/logos/nhl/svg/{abbrev}_light.svg"
 
     @staticmethod
     def _nhl_parse_dt(game: dict) -> datetime:
