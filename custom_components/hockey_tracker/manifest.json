@@ -1,0 +1,12 @@
+{
+  "domain": "hockey_tracker",
+  "name": "Hockey Tracker",
+  "version": "1.2.0",
+  "config_flow": true,
+  "documentation": "https://github.com/linkian19/ha-hockey-tracker",
+  "issue_tracker": "https://github.com/linkian19/ha-hockey-tracker/issues",
+  "codeowners": ["@linkian19"],
+  "requirements": [],
+  "iot_class": "cloud_polling",
+  "homeassistant": "2024.1.0"
+}

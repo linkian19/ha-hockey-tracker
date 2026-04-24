@@ -1,0 +1,36 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Hockey Tracker — Select League",
+        "description": "Choose the league you want to track.",
+        "data": {
+          "league": "League"
+        }
+      },
+      "api_key": {
+        "title": "Hockey Tracker — API Key",
+        "description": "Enter the HockeyTech API key for the {league}. See [setup instructions]({docs_url}) for how to obtain it.",
+        "data": {
+          "api_key": "API Key"
+        }
+      },
+      "team": {
+        "title": "Hockey Tracker — Select Team",
+        "description": "Choose the team you want to track.",
+        "data": {
+          "team_id": "Team"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Invalid API key.",
+      "cannot_connect": "Unable to reach the API. Check your network.",
+      "no_teams": "Connected successfully but no teams were returned.",
+      "unknown": "Unexpected error. Check logs."
+    },
+    "abort": {
+      "already_configured": "This team is already configured."
+    }
+  }
+}

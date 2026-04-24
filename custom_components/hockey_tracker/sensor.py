@@ -1,4 +1,4 @@
-"""Sensor platform for ECHL Tracker."""
+"""Sensor platform for Hockey Tracker."""
 from __future__ import annotations
 
 from homeassistant.components.sensor import SensorEntity
@@ -8,7 +8,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import ATTRIBUTION, CONF_TEAM_NAME, DOMAIN
-from .coordinator import EchlCoordinator
+from .coordinator import HockeyCoordinator
 
 _GAME_ATTRS = (
     "game_id", "start_time", "period", "clock",
@@ -23,20 +23,20 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    coordinator: EchlCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([EchlGameSensor(coordinator, entry)])
+    coordinator: HockeyCoordinator = hass.data[DOMAIN][entry.entry_id]
+    async_add_entities([HockeyGameSensor(coordinator, entry)])
 
 
-class EchlGameSensor(CoordinatorEntity[EchlCoordinator], SensorEntity):
+class HockeyGameSensor(CoordinatorEntity[HockeyCoordinator], SensorEntity):
     """Single sensor entity — state is game_state, all data in attributes."""
 
     _attr_attribution = ATTRIBUTION
     _attr_has_entity_name = True
 
-    def __init__(self, coordinator: EchlCoordinator, entry: ConfigEntry) -> None:
+    def __init__(self, coordinator: HockeyCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator)
         self._team_name: str = entry.data[CONF_TEAM_NAME]
-        self._attr_unique_id = f"echl_tracker_{entry.data['team_id']}"
+        self._attr_unique_id = f"hockey_tracker_{entry.data['team_id']}"
         self._attr_name = f"{self._team_name} Game"
 
     @property
@@ -57,7 +57,6 @@ class EchlGameSensor(CoordinatorEntity[EchlCoordinator], SensorEntity):
         data = self.coordinator.data
         attrs: dict = {k: data.get(k) for k in _GAME_ATTRS}
 
-        # Next game
         ng = data.get("next_game")
         if ng:
             attrs["next_game_date"] = ng.get("game_date")
@@ -68,7 +67,5 @@ class EchlGameSensor(CoordinatorEntity[EchlCoordinator], SensorEntity):
             attrs["next_game_away_logo_url"] = ng.get("away_logo_url")
             attrs["next_game_venue"] = ng.get("venue")
 
-        # Recent games
         attrs["recent_games"] = data.get("recent_games", [])
-
         return attrs
