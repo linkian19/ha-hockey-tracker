@@ -1,0 +1,29 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "ECHL Tracker — API Key",
+        "description": "Enter the HockeyTech API key for the ECHL. See [setup instructions]({docs_url}) for how to obtain it.",
+        "data": {
+          "api_key": "API Key"
+        }
+      },
+      "team": {
+        "title": "ECHL Tracker — Select Team",
+        "description": "Choose the team you want to track.",
+        "data": {
+          "team_id": "Team"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Invalid API key.",
+      "cannot_connect": "Unable to reach HockeyTech. Check your network.",
+      "no_teams": "API key valid but no teams were returned.",
+      "unknown": "Unexpected error. Check logs."
+    },
+    "abort": {
+      "already_configured": "This team is already configured."
+    }
+  }
+}

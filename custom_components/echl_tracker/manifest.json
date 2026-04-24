@@ -1,0 +1,12 @@
+{
+  "domain": "echl_tracker",
+  "name": "ECHL Tracker",
+  "version": "1.0.0",
+  "config_flow": true,
+  "documentation": "https://github.com/IanStanek/ha-echl-tracker",
+  "issue_tracker": "https://github.com/IanStanek/ha-echl-tracker/issues",
+  "codeowners": ["@IanStanek"],
+  "requirements": [],
+  "iot_class": "cloud_polling",
+  "homeassistant": "2024.1.0"
+}
