@@ -22,6 +22,12 @@ SCAN_INTERVAL_GAME_SOON = 900    # Next game < 6 hours away
 SCAN_INTERVAL_GAME_TODAY = 1800  # Next game < 24 hours away
 SCAN_INTERVAL_IDLE = 7200        # Next game is tomorrow or later
 
+# Schedule cache TTL (seconds) — avoids repeated schedule calls during live polling
+SCHEDULE_CACHE_TTL = 3600
+
+# Max recent games stored as sensor attributes
+RECENT_GAMES_MAX = 10
+
 # Game states
 GAME_STATE_PRE = "PRE"
 GAME_STATE_LIVE = "LIVE"

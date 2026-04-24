@@ -10,6 +10,13 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import ATTRIBUTION, CONF_TEAM_NAME, DOMAIN
 from .coordinator import EchlCoordinator
 
+_GAME_ATTRS = (
+    "game_id", "start_time", "period", "clock",
+    "home_team", "home_team_id", "home_score", "home_shots", "home_logo_url",
+    "away_team", "away_team_id", "away_score", "away_shots", "away_logo_url",
+    "is_home", "team_logo_url", "venue",
+)
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -21,7 +28,7 @@ async def async_setup_entry(
 
 
 class EchlGameSensor(CoordinatorEntity[EchlCoordinator], SensorEntity):
-    """Single sensor entity exposing all game data as attributes."""
+    """Single sensor entity — state is game_state, all data in attributes."""
 
     _attr_attribution = ATTRIBUTION
     _attr_has_entity_name = True
@@ -37,35 +44,6 @@ class EchlGameSensor(CoordinatorEntity[EchlCoordinator], SensorEntity):
         return self.coordinator.data.get("game_state", "UNKNOWN")
 
     @property
-    def extra_state_attributes(self) -> dict:
-        data = self.coordinator.data
-        attrs: dict = {}
-
-        for key in (
-            "game_id", "start_time", "period", "clock",
-            "home_team", "home_score", "home_shots",
-            "away_team", "away_score", "away_shots",
-            "is_home", "venue",
-        ):
-            attrs[key] = data.get(key)
-
-        next_game = data.get("next_game")
-        if next_game:
-            attrs["next_game_date"] = next_game.get("game_date")
-            attrs["next_game_venue"] = next_game.get("venue")
-            attrs["next_game_home"] = next_game.get("is_home")
-            if next_game.get("is_home"):
-                attrs["next_game_opponent"] = (
-                    f"{next_game.get('away_team_city', '')} {next_game.get('away_team_nickname', '')}".strip()
-                )
-            else:
-                attrs["next_game_opponent"] = (
-                    f"{next_game.get('home_team_city', '')} {next_game.get('home_team_nickname', '')}".strip()
-                )
-
-        return attrs
-
-    @property
     def icon(self) -> str:
         state = self.coordinator.data.get("game_state")
         if state == "LIVE":
@@ -73,3 +51,24 @@ class EchlGameSensor(CoordinatorEntity[EchlCoordinator], SensorEntity):
         if state == "PRE":
             return "mdi:calendar-clock"
         return "mdi:scoreboard"
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        data = self.coordinator.data
+        attrs: dict = {k: data.get(k) for k in _GAME_ATTRS}
+
+        # Next game
+        ng = data.get("next_game")
+        if ng:
+            attrs["next_game_date"] = ng.get("game_date")
+            attrs["next_game_home"] = ng.get("is_home")
+            attrs["next_game_home_team"] = ng.get("home_team")
+            attrs["next_game_away_team"] = ng.get("away_team")
+            attrs["next_game_home_logo_url"] = ng.get("home_logo_url")
+            attrs["next_game_away_logo_url"] = ng.get("away_logo_url")
+            attrs["next_game_venue"] = ng.get("venue")
+
+        # Recent games
+        attrs["recent_games"] = data.get("recent_games", [])
+
+        return attrs
