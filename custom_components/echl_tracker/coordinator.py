@@ -1,7 +1,6 @@
 """DataUpdateCoordinator for ECHL Tracker."""
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime, timedelta, timezone
 import logging
 from typing import Any
@@ -107,21 +106,41 @@ class EchlCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return None
 
     async def _fetch_next_game(self) -> dict[str, Any] | None:
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         try:
             result = await self._fetch({
                 "feed": "modulekit",
                 "view": "schedule",
                 "team_id": self.team_id,
-                "first": "1",
             })
             games = result.get("SiteKit", {}).get("Schedule", [])
-            upcoming = [g for g in games if g.get("game_status") not in ("Final", "F")]
+            now = datetime.now(timezone.utc)
+            upcoming = [g for g in games if self._parse_game_dt(g) >= now]
+            upcoming.sort(key=lambda g: self._parse_game_dt(g))
             if upcoming:
-                return upcoming[0]
+                g = upcoming[0]
+                is_home = str(g.get("home_team")) == self.team_id
+                return {
+                    "game_date": g.get("GameDateISO8601"),
+                    "home_team_id": g.get("home_team"),
+                    "home_team_city": g.get("home_team_city"),
+                    "home_team_nickname": g.get("home_team_nickname"),
+                    "away_team_id": g.get("visiting_team"),
+                    "away_team_city": g.get("visiting_team_city"),
+                    "away_team_nickname": g.get("visiting_team_nickname"),
+                    "venue": g.get("venue_name"),
+                    "is_home": is_home,
+                }
         except Exception as err:
             _LOGGER.debug("Could not fetch next game: %s", err)
         return None
+
+    @staticmethod
+    def _parse_game_dt(game: dict) -> datetime:
+        raw = game.get("GameDateISO8601", "")
+        try:
+            return datetime.fromisoformat(raw)
+        except (ValueError, TypeError):
+            return datetime.min.replace(tzinfo=timezone.utc)
 
     def _normalize_game(self, game: dict) -> dict[str, Any]:
         status = game.get("GameStatus", "")

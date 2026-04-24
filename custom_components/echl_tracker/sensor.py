@@ -52,12 +52,16 @@ class EchlGameSensor(CoordinatorEntity[EchlCoordinator], SensorEntity):
         next_game = data.get("next_game")
         if next_game:
             attrs["next_game_date"] = next_game.get("game_date")
-            attrs["next_game_opponent"] = (
-                next_game.get("VisitorCity", "") + " " + next_game.get("VisitorNickname", "")
-                if str(next_game.get("HomeID")) == self.coordinator.team_id
-                else next_game.get("HomeCity", "") + " " + next_game.get("HomeNickname", "")
-            )
-            attrs["next_game_home"] = str(next_game.get("HomeID")) == self.coordinator.team_id
+            attrs["next_game_venue"] = next_game.get("venue")
+            attrs["next_game_home"] = next_game.get("is_home")
+            if next_game.get("is_home"):
+                attrs["next_game_opponent"] = (
+                    f"{next_game.get('away_team_city', '')} {next_game.get('away_team_nickname', '')}".strip()
+                )
+            else:
+                attrs["next_game_opponent"] = (
+                    f"{next_game.get('home_team_city', '')} {next_game.get('home_team_nickname', '')}".strip()
+                )
 
         return attrs
 

@@ -7,6 +7,9 @@ ATTRIBUTION = "Data provided by HockeyTech / LeagueStat"
 HOCKEYTECH_BASE = "https://lscluster.hockeytech.com/feed/index.php"
 CLIENT_CODE = "echl"
 
+# Known public API key embedded in the ECHL app — may need updating if rotated
+DEFAULT_API_KEY = "2c2b89ea7345cae8"
+
 CONF_API_KEY = "api_key"
 CONF_TEAM_ID = "team_id"
 CONF_TEAM_NAME = "team_name"
