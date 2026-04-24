@@ -26,6 +26,7 @@ from .const import (
     NHL_API_BASE,
     NHL_FINAL_STATES,
     NHL_LIVE_STATES,
+    NHL_PRE_STATES,
     RECENT_GAMES_MAX,
     SCAN_INTERVAL_FINAL,
     SCAN_INTERVAL_GAME_SOON,
@@ -49,12 +50,15 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._session: aiohttp.ClientSession | None = None
         self._schedule_cache: list[dict] | None = None
         self._schedule_cache_time: datetime | None = None
+        # Logo cache keyed by team ID (HockeyTech) or abbreviation (NHL).
+        # HockeyTech CDN paths include a version suffix that cannot be constructed
+        # from team ID alone, so we populate this from live API responses.
+        self._logo_cache: dict[str, str] = {}
 
         if self.league in HOCKEYTECH_LEAGUES:
             self.api_key: str = entry.data[CONF_API_KEY]
             league_cfg = HOCKEYTECH_LEAGUES[self.league]
             self._client_code: str = league_cfg["client_code"]
-            self._ht_logo_url: str = league_cfg["logo_url"]
 
         super().__init__(
             hass,
@@ -123,6 +127,16 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         })
 
         all_games: list[dict] = scorebar.get("SiteKit", {}).get("Scorebar", [])
+
+        # Populate logo cache from all scorebar games — HomeLogo/VisitorLogo are
+        # authoritative; the CDN path includes a version suffix that varies by team
+        # and cannot be constructed from the team ID alone.
+        for g in all_games:
+            if g.get("HomeID") and g.get("HomeLogo"):
+                self._logo_cache[str(g["HomeID"])] = g["HomeLogo"]
+            if g.get("VisitorID") and g.get("VisitorLogo"):
+                self._logo_cache[str(g["VisitorID"])] = g["VisitorLogo"]
+
         team_games = [
             g for g in all_games
             if str(g.get("HomeID")) == self.team_id or str(g.get("VisitorID")) == self.team_id
@@ -172,7 +186,7 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             })
             return result.get("SiteKit", {}).get("Schedule", [])
         except Exception as err:
-            _LOGGER.debug("Schedule fetch failed: %s", err)
+            _LOGGER.debug("HockeyTech schedule fetch failed: %s", err)
             return self._schedule_cache or []
 
     def _ht_first_upcoming(self, games: list[dict]) -> dict[str, Any] | None:
@@ -191,15 +205,10 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "is_home": home_id == self.team_id,
             "home_team": f"{g.get('home_team_city','')} {g.get('home_team_nickname','')}".strip(),
             "away_team": f"{g.get('visiting_team_city','')} {g.get('visiting_team_nickname','')}".strip(),
-            "home_logo_url": self._ht_logo(home_id),
-            "away_logo_url": self._ht_logo(away_id),
+            "home_logo_url": self._logo_cache.get(home_id),
+            "away_logo_url": self._logo_cache.get(away_id),
             "venue": g.get("venue_name", ""),
         }
-
-    def _ht_logo(self, team_id: str | int | None) -> str | None:
-        if not team_id:
-            return None
-        return self._ht_logo_url.format(team_id)
 
     def _ht_normalize_game(self, game: dict) -> dict[str, Any]:
         status = str(game.get("GameStatus", ""))
@@ -224,12 +233,12 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "home_team_id": home_id,
             "home_score": game.get("HomeGoals", 0),
             "home_shots": game.get("HomeShots", 0),
-            "home_logo_url": self._ht_logo(home_id),
+            "home_logo_url": game.get("HomeLogo") or self._logo_cache.get(home_id),
             "away_team": f"{game.get('VisitorCity','')} {game.get('VisitorNickname','')}".strip(),
             "away_team_id": away_id,
             "away_score": game.get("VisitorGoals", 0),
             "away_shots": game.get("VisitorShots", 0),
-            "away_logo_url": self._ht_logo(away_id),
+            "away_logo_url": game.get("VisitorLogo") or self._logo_cache.get(away_id),
             "is_home": is_home,
             "team_logo_url": self.team_logo_url,
             "venue": game.get("venue_name"),
@@ -237,11 +246,16 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def _ht_normalize_recent(self, game: dict) -> dict[str, Any]:
         is_home = str(game.get("HomeID")) == self.team_id
-        opp_id = game.get("VisitorID") if is_home else game.get("HomeID")
+        opp_id = str(game.get("VisitorID") if is_home else game.get("HomeID"))
         opp_name = (
             f"{game.get('VisitorCity','')} {game.get('VisitorNickname','')}".strip()
             if is_home
             else f"{game.get('HomeCity','')} {game.get('HomeNickname','')}".strip()
+        )
+        opp_logo = (
+            (game.get("VisitorLogo") or self._logo_cache.get(opp_id))
+            if is_home
+            else (game.get("HomeLogo") or self._logo_cache.get(opp_id))
         )
         home_goals = int(game.get("HomeGoals") or 0)
         away_goals = int(game.get("VisitorGoals") or 0)
@@ -250,7 +264,7 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return {
             "date": game.get("GameDateISO8601"),
             "opponent": opp_name,
-            "opponent_logo_url": self._ht_logo(opp_id),
+            "opponent_logo_url": opp_logo,
             "team_score": team_score,
             "opponent_score": opp_score,
             "is_home": is_home,
@@ -288,14 +302,21 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     # ------------------------------------------------------------------
 
     async def _fetch_nhl(self) -> dict[str, Any]:
-        # Scoreboard covers a rolling window around today
         scoreboard = await self._fetch_json(f"{NHL_API_BASE}/scoreboard/now")
 
         all_games: list[dict] = []
         for day in scoreboard.get("gamesByDate", []):
             all_games.extend(day.get("games", []))
-        # Also handle flat "games" key if structure differs
         all_games.extend(scoreboard.get("games", []))
+
+        # Populate logo cache from scoreboard team objects
+        for g in all_games:
+            for key in ("awayTeam", "homeTeam"):
+                team = g.get(key, {})
+                abbrev = team.get("abbrev")
+                logo = team.get("logo")
+                if abbrev and logo:
+                    self._logo_cache[abbrev] = logo
 
         team_games = [
             g for g in all_games
@@ -314,23 +335,13 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return data
 
     def _nhl_find_active(self, team_games: list[dict]) -> dict | None:
-        pre = None
-        for g in team_games:
-            state = g.get("gameState", "")
-            if state in NHL_LIVE_STATES:
-                return g
-            if state in NHL_FINAL_STATES and pre is None:
-                pre = g  # prefer LIVE but keep most recent FINAL
-            elif state not in NHL_FINAL_STATES and pre is None:
-                pre = g
-        # Return LIVE > recent FINAL > PRE/FUT
-        for g in team_games:
-            if g.get("gameState", "") in NHL_LIVE_STATES:
-                return g
-        for g in team_games:
-            if g.get("gameState", "") in NHL_FINAL_STATES:
-                return g
-        return pre
+        live = next((g for g in team_games if g.get("gameState") in NHL_LIVE_STATES), None)
+        if live:
+            return live
+        final = next((g for g in team_games if g.get("gameState") in NHL_FINAL_STATES), None)
+        if final:
+            return final
+        return next((g for g in team_games if g.get("gameState") in NHL_PRE_STATES), None)
 
     async def _get_nhl_schedule_cached(self) -> list[dict]:
         now = datetime.now(timezone.utc)
@@ -341,6 +352,8 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if age > SCHEDULE_CACHE_TTL:
             self._schedule_cache = await self._fetch_nhl_schedule()
             self._schedule_cache_time = now
+            # Refresh logo cache from standings whenever schedule cache expires
+            await self._refresh_nhl_logo_cache()
         return self._schedule_cache or []
 
     async def _fetch_nhl_schedule(self) -> list[dict]:
@@ -348,10 +361,30 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             result = await self._fetch_json(
                 f"{NHL_API_BASE}/club-schedule-season/{self.team_id}/now"
             )
-            return result.get("games", [])
+            games = result.get("games", [])
+            for g in games:
+                for key in ("awayTeam", "homeTeam"):
+                    team = g.get(key, {})
+                    abbrev = team.get("abbrev")
+                    logo = team.get("logo")
+                    if abbrev and logo:
+                        self._logo_cache[abbrev] = logo
+            return games
         except Exception as err:
             _LOGGER.debug("NHL schedule fetch failed: %s", err)
             return self._schedule_cache or []
+
+    async def _refresh_nhl_logo_cache(self) -> None:
+        """Fetch all NHL team logos from standings — most complete source."""
+        try:
+            data = await self._fetch_json(f"{NHL_API_BASE}/standings/now")
+            for entry in data.get("standings", []):
+                abbrev = entry.get("teamAbbrev", {}).get("default", "")
+                logo = entry.get("teamLogo", "")
+                if abbrev and logo:
+                    self._logo_cache[abbrev] = logo
+        except Exception as err:
+            _LOGGER.debug("NHL logo cache refresh failed: %s", err)
 
     def _nhl_first_upcoming(self, games: list[dict]) -> dict[str, Any] | None:
         now = datetime.now(timezone.utc)
@@ -369,8 +402,8 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "is_home": home.get("abbrev") == self.team_id,
             "home_team": self._nhl_full_name(home),
             "away_team": self._nhl_full_name(away),
-            "home_logo_url": home.get("logo") or self._nhl_logo(home.get("abbrev")),
-            "away_logo_url": away.get("logo") or self._nhl_logo(away.get("abbrev")),
+            "home_logo_url": self._nhl_logo(home.get("abbrev"), home.get("logo")),
+            "away_logo_url": self._nhl_logo(away.get("abbrev"), away.get("logo")),
             "venue": g.get("venue", {}).get("default", ""),
         }
 
@@ -398,11 +431,7 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         period_desc = game.get("periodDescriptor", {})
         period = period_desc.get("number")
         clock_data = game.get("clock", {})
-        if clock_data.get("inIntermission"):
-            clock = "INT"
-        else:
-            clock = clock_data.get("timeRemaining")
-
+        clock = "INT" if clock_data.get("inIntermission") else clock_data.get("timeRemaining")
         is_home = home.get("abbrev") == self.team_id
 
         return {
@@ -415,12 +444,12 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "home_team_id": home.get("abbrev"),
             "home_score": home.get("score", 0),
             "home_shots": home.get("sog"),
-            "home_logo_url": home.get("logo") or self._nhl_logo(home.get("abbrev")),
+            "home_logo_url": self._nhl_logo(home.get("abbrev"), home.get("logo")),
             "away_team": self._nhl_full_name(away),
             "away_team_id": away.get("abbrev"),
             "away_score": away.get("score", 0),
             "away_shots": away.get("sog"),
-            "away_logo_url": away.get("logo") or self._nhl_logo(away.get("abbrev")),
+            "away_logo_url": self._nhl_logo(away.get("abbrev"), away.get("logo")),
             "is_home": is_home,
             "team_logo_url": self.team_logo_url,
             "venue": game.get("venue", {}).get("default"),
@@ -436,7 +465,7 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return {
             "date": game.get("startTimeUTC") or game.get("gameDate"),
             "opponent": self._nhl_full_name(opp),
-            "opponent_logo_url": opp.get("logo") or self._nhl_logo(opp.get("abbrev")),
+            "opponent_logo_url": self._nhl_logo(opp.get("abbrev"), opp.get("logo")),
             "team_score": team_score,
             "opponent_score": opp_score,
             "is_home": is_home,
@@ -450,11 +479,17 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         name = team.get("commonName", {}).get("default", team.get("abbrev", ""))
         return f"{city} {name}".strip()
 
-    @staticmethod
-    def _nhl_logo(abbrev: str | None) -> str | None:
+    def _nhl_logo(self, abbrev: str | None, direct_url: str | None = None) -> str | None:
+        """Return the best available logo URL for an NHL team.
+
+        Priority: direct URL from API response → standings/scoreboard cache →
+        constructed SVG URL as last resort.
+        """
+        if direct_url:
+            return direct_url
         if not abbrev:
             return None
-        return f"https://assets.nhle.com/logos/nhl/svg/{abbrev}_dark.svg"
+        return self._logo_cache.get(abbrev) or f"https://assets.nhle.com/logos/nhl/svg/{abbrev}_dark.svg"
 
     @staticmethod
     def _nhl_parse_dt(game: dict) -> datetime:
