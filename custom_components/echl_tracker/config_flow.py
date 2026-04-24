@@ -54,8 +54,7 @@ async def _validate_and_fetch_teams(api_key: str) -> list[dict]:
             teams_data = await resp.json(content_type=None)
 
     site_kit = teams_data.get("SiteKit", {})
-    # HockeyTech uses title-case keys; try both
-    teams = site_kit.get("Teams") or site_kit.get("teams") or []
+    teams = site_kit.get("Teamsbyseason") or site_kit.get("Teams") or site_kit.get("teams") or []
     return teams
 
 
@@ -115,6 +114,7 @@ class EchlTrackerConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             team_id = user_input[CONF_TEAM_ID]
             team_name = team_options.get(team_id, "ECHL Team")
+            team_obj = next((t for t in self._teams if str(t.get("id")) == team_id), {})
             await self.async_set_unique_id(f"echl_{team_id}")
             self._abort_if_unique_id_configured()
             return self.async_create_entry(
@@ -123,6 +123,7 @@ class EchlTrackerConfigFlow(ConfigFlow, domain=DOMAIN):
                     CONF_API_KEY: self._api_key,
                     CONF_TEAM_ID: team_id,
                     CONF_TEAM_NAME: team_name,
+                    "team_logo_url": team_obj.get("team_logo_url", ""),
                 },
             )
 
