@@ -14,7 +14,7 @@ A [Home Assistant](https://www.home-assistant.io/) custom integration that track
 - Live in-game scores, period, and clock display
 - Shots on goal (home and away)
 - Game state sensor: `PRE`, `LIVE`, `FINAL`, `NO_GAME`
-- Team logos via CDN for all leagues
+- Full-resolution team logos via CDN for all leagues
 - Next upcoming game details (opponent, date/time, venue, logos)
 - Recent game results (up to 10)
 - Adaptive polling — 30 s during live games, up to 2 h when no game is near
@@ -67,7 +67,7 @@ Each configured team creates one sensor entity. The state reflects the current g
 | `PRE` | Game scheduled but not yet started |
 | `LIVE` | Game currently in progress |
 | `FINAL` | Game has ended |
-| `NO_GAME` | No game active — next game info is in attributes |
+| `NO_GAME` | No game today — next game info is in attributes (absent during off-season) |
 
 ### Attributes
 
@@ -164,6 +164,21 @@ automation:
             {% set a = trigger.to_state.attributes %}
             {{ a.away_team }} {{ a.away_score }} – {{ a.home_score }} {{ a.home_team }}
 ```
+
+---
+
+## Notes by League
+
+### NHL
+
+- No API key required; data comes from the public `api-web.nhle.com/v1` API.
+- Team logos are fetched from the NHL CDN at startup and cached for the session.
+- During the off-season or after a team is eliminated from the playoffs, the sensor state is `NO_GAME` with no `next_game` attributes. The companion card will show the team logo and "No upcoming games scheduled" in this state.
+
+### ECHL / AHL
+
+- The integration uses the HockeyTech API key embedded in the official league apps. Known keys are pre-filled. If a league rotates its key, see the [Configuration](#configuration) section for how to find the updated key.
+- Logo CDN URLs include a version suffix that is team-specific (e.g. `319_92.png`). The integration discovers these from live API responses and caches them — all logos load at full resolution.
 
 ---
 
