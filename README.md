@@ -1,21 +1,23 @@
-# ECHL Tracker
+# Hockey Tracker
 
-A [Home Assistant](https://www.home-assistant.io/) custom integration that tracks live scores, game state, and upcoming schedule for any [ECHL](https://www.echl.com/) team.
+A [Home Assistant](https://www.home-assistant.io/) custom integration that tracks live scores, game state, and upcoming schedule for any **ECHL**, **AHL**, or **NHL** team.
 
-Data is sourced from the HockeyTech / LeagueStat API — the same backend that powers the official ECHL website and mobile app.
+- **ECHL / AHL** — data from the HockeyTech / LeagueStat API (same backend as the official league apps)
+- **NHL** — data from the public NHL Stats API (`api-web.nhle.com`), no API key required
 
-> **Companion card:** Install [ha-echl-tracker-card](https://github.com/linkian19/ha-echl-tracker-card) to display this data on your dashboard.
+> **Companion card:** Install [ha-hockey-tracker-card](https://github.com/linkian19/ha-hockey-tracker-card) to display this data on your Lovelace dashboard.
 
 ---
 
 ## Features
 
-- Live in-game scores and period/clock display
+- Live in-game scores, period, and clock display
 - Shots on goal (home and away)
-- Game state: `PRE`, `LIVE`, `FINAL`, `NO_GAME`
-- Next upcoming game details when no game is active
-- Configurable for any ECHL team via UI
-- Adaptive polling — updates every 30 seconds during live games, every 5 minutes otherwise
+- Game state sensor: `PRE`, `LIVE`, `FINAL`, `NO_GAME`
+- Team logos via CDN for all leagues
+- Next upcoming game details (opponent, date/time, venue, logos)
+- Recent game results (up to 10)
+- Adaptive polling — 30 s during live games, up to 2 h when no game is near
 
 ---
 
@@ -25,13 +27,13 @@ Data is sourced from the HockeyTech / LeagueStat API — the same backend that p
 
 1. In Home Assistant, open **HACS → Integrations**
 2. Click the three-dot menu → **Custom repositories**
-3. Add `https://github.com/linkian19/ha-echl-tracker` with category **Integration**
-4. Search for "ECHL Tracker" and install
+3. Add `https://github.com/linkian19/ha-hockey-tracker` with category **Integration**
+4. Search for **Hockey Tracker** and install
 5. Restart Home Assistant
 
 ### Manual
 
-1. Copy the `custom_components/echl_tracker/` folder into your HA `config/custom_components/` directory
+1. Copy the `custom_components/hockey_tracker/` folder into your HA `config/custom_components/` directory
 2. Restart Home Assistant
 
 ---
@@ -39,57 +41,103 @@ Data is sourced from the HockeyTech / LeagueStat API — the same backend that p
 ## Configuration
 
 1. Go to **Settings → Devices & Services → Add Integration**
-2. Search for **ECHL Tracker**
-3. Enter the API key (pre-filled with the known key — see below)
-4. Select your team from the dropdown
+2. Search for **Hockey Tracker**
+3. Select your league: **ECHL**, **AHL**, or **NHL**
+4. For ECHL/AHL: enter the API key (pre-filled with the known key)
+5. Select your team from the dropdown
 
-### API Key
+### API Keys
 
-The integration uses the HockeyTech API key embedded in the official ECHL app. The current known key is pre-filled in the setup form. If the ECHL rotates this key and the integration stops working, you can find the updated key by:
+**NHL** — no API key required. The NHL Stats API is public.
 
-1. Opening `https://lscluster.hockeytech.com/statview/mobile/echl/` in Chrome
-2. Pressing F12 → **Network** tab → filter by `feed`
-3. Reloading the page — any request URL will contain `key=XXXXXXXXXXXXXXXX`
+**ECHL / AHL** — the integration uses the HockeyTech API key embedded in the official league apps. Known keys are pre-filled in the setup form. If a league rotates its key and the integration stops working, you can find the updated key by:
+
+1. Opening the league website in Chrome and pressing **F12 → Network**
+2. Filtering requests by `lscluster.hockeytech.com`
+3. Any matching request URL will contain `key=XXXXXXXXXXXXXXXX`
 
 ---
 
 ## Sensor
 
-Each configured team creates one sensor entity:
-
-| Entity | Example |
-|--------|---------|
-| `sensor.kansas_city_mavericks_game` | State: `LIVE` |
-
-### State Values
+Each configured team creates one sensor entity. The state reflects the current game status:
 
 | State | Meaning |
 |-------|---------|
-| `PRE` | Game is scheduled but not yet started |
-| `LIVE` | Game is currently in progress |
+| `PRE` | Game scheduled but not yet started |
+| `LIVE` | Game currently in progress |
 | `FINAL` | Game has ended |
-| `NO_GAME` | No game today — next game info is in attributes |
+| `NO_GAME` | No game active — next game info is in attributes |
 
 ### Attributes
 
+#### Active game
+
 | Attribute | Description |
 |-----------|-------------|
-| `game_id` | HockeyTech game ID |
-| `start_time` | ISO 8601 game start time |
+| `game_id` | League game ID |
+| `start_time` | ISO 8601 game start time (UTC) |
 | `period` | Current period number |
 | `clock` | Current game clock |
 | `home_team` | Full home team name |
+| `home_team_id` | Home team ID or abbreviation |
 | `home_score` | Home team goals |
 | `home_shots` | Home team shots on goal |
+| `home_logo_url` | Home team logo URL |
 | `away_team` | Full away team name |
+| `away_team_id` | Away team ID or abbreviation |
 | `away_score` | Away team goals |
 | `away_shots` | Away team shots on goal |
-| `is_home` | `true` if your team is the home team |
+| `away_logo_url` | Away team logo URL |
+| `is_home` | `true` if your tracked team is the home team |
+| `team_logo_url` | Your tracked team's logo URL |
 | `venue` | Arena name |
-| `next_game_date` | ISO 8601 datetime of next game (when `NO_GAME`) |
-| `next_game_opponent` | Opponent name for next game |
+
+#### Next game (always present when available)
+
+| Attribute | Description |
+|-----------|-------------|
+| `next_game_date` | ISO 8601 datetime of next game |
 | `next_game_home` | `true` if next game is at home |
+| `next_game_home_team` | Full home team name |
+| `next_game_away_team` | Full away team name |
+| `next_game_home_logo_url` | Home team logo for next game |
+| `next_game_away_logo_url` | Away team logo for next game |
 | `next_game_venue` | Arena for next game |
+
+#### Recent games
+
+| Attribute | Description |
+|-----------|-------------|
+| `recent_games` | List of up to 10 completed games, newest first |
+
+Each entry in `recent_games`:
+
+| Field | Description |
+|-------|-------------|
+| `date` | ISO 8601 game date |
+| `opponent` | Opponent full name |
+| `opponent_logo_url` | Opponent logo URL |
+| `team_score` | Your team's final score |
+| `opponent_score` | Opponent's final score |
+| `win` | `true` if your team won |
+| `is_home` | `true` if your team was home |
+| `venue` | Arena name |
+
+---
+
+## Polling Intervals
+
+The integration automatically adjusts how often it polls based on game state:
+
+| Situation | Interval |
+|-----------|----------|
+| Game in progress (LIVE) | 30 seconds |
+| Game today, not yet started (PRE) | 5 minutes |
+| Game just ended (FINAL) | 15 minutes |
+| Next game within 6 hours | 15 minutes |
+| Next game within 24 hours | 30 minutes |
+| Next game tomorrow or later | 2 hours |
 
 ---
 
@@ -97,24 +145,28 @@ Each configured team creates one sensor entity:
 
 ```yaml
 automation:
-  - alias: "Alert when Mavericks score"
+  - alias: "Alert when team scores"
     trigger:
       - platform: state
         entity_id: sensor.kansas_city_mavericks_game
     condition:
       - condition: template
         value_template: >
-          {{ trigger.to_state.attributes.home_score | int >
-             trigger.from_state.attributes.home_score | int
-             and trigger.to_state.attributes.is_home }}
+          {% set a = trigger.to_state.attributes %}
+          {% set b = trigger.from_state.attributes %}
+          {{ trigger.to_state.state == 'LIVE' and
+             (a.home_score | int > b.home_score | int and a.is_home) or
+             (a.away_score | int > b.away_score | int and not a.is_home) }}
     action:
       - service: notify.mobile_app
         data:
-          message: "Mavericks score! {{ states.sensor.kansas_city_mavericks_game.attributes.home_score }} - {{ states.sensor.kansas_city_mavericks_game.attributes.away_score }}"
+          message: >
+            {% set a = trigger.to_state.attributes %}
+            {{ a.away_team }} {{ a.away_score }} – {{ a.home_score }} {{ a.home_team }}
 ```
 
 ---
 
 ## Issues & Contributing
 
-Please open an issue at [github.com/linkian19/ha-echl-tracker/issues](https://github.com/linkian19/ha-echl-tracker/issues).
+Please open an issue at [github.com/linkian19/ha-hockey-tracker/issues](https://github.com/linkian19/ha-hockey-tracker/issues).
