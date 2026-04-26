@@ -1,7 +1,7 @@
 {
   "domain": "hockey_tracker",
   "name": "Hockey Tracker",
-  "version": "1.2.4",
+  "version": "1.2.5",
   "config_flow": true,
   "documentation": "https://github.com/linkian19/ha-hockey-tracker",
   "issue_tracker": "https://github.com/linkian19/ha-hockey-tracker/issues",

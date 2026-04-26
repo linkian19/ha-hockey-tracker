@@ -92,6 +92,7 @@ Each configured team creates one sensor entity. The state reflects the current g
 | `away_logo_url` | Away team logo URL |
 | `is_home` | `true` if your tracked team is the home team |
 | `team_logo_url` | Your tracked team's logo URL |
+| `team_name` | Full name of your tracked team |
 | `venue` | Arena name |
 
 #### Next game (always present when available)
