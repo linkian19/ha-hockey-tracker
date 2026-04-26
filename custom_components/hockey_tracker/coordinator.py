@@ -42,6 +42,12 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 
+def _event_sort_key(e: dict) -> tuple:
+    parts = e.get("time", "0:00").split(":")
+    t = int(parts[0]) * 60 + int(parts[1]) if len(parts) == 2 else 0
+    return (e.get("period", 0), t)
+
+
 class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """Polls game data with adaptive update intervals. Supports ECHL, AHL, and NHL."""
 
@@ -148,9 +154,9 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         recent = self._ht_extract_recent(team_games)
         next_game = await self._get_ht_schedule_cached()
 
-        # Fetch game summary for live games — provides shots and event feed
+        # Fetch game summary for live and final games — provides shots and event feed
         summary = None
-        if active and str(active.get("GameStatus", "")) not in ("1", "4"):
+        if active and str(active.get("GameStatus", "")) not in ("1",):
             game_id = str(active.get("GameID") or active.get("ID") or "")
             if game_id:
                 summary = await self._fetch_ht_game_summary(game_id)
@@ -161,14 +167,21 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return data
 
     def _ht_find_active(self, team_games: list[dict]) -> dict | None:
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+        live = None
+        recent_final = None
         pre = None
         for g in team_games:
             status = str(g.get("GameStatus", ""))
             if status not in ("1", "4"):
-                return g
-            if status == "1" and pre is None:
+                if live is None:
+                    live = g
+            elif status == "4" and recent_final is None:
+                if self._ht_parse_dt(g) >= cutoff:
+                    recent_final = g
+            elif status == "1" and pre is None:
                 pre = g
-        return pre
+        return live or recent_final or pre
 
     def _ht_extract_recent(self, team_games: list[dict]) -> list[dict]:
         completed = [g for g in team_games if str(g.get("GameStatus", "")) == "4"]
@@ -256,7 +269,7 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "away_shots": away_shots,
             "away_logo_url": self._upscale_ht_logo(game.get("VisitorLogo")) or self._logo_cache.get(away_id),
             "is_home": is_home,
-            "team_logo_url": self.team_logo_url,
+            "team_logo_url": self._my_logo(),
             "venue": game.get("venue_name"),
             "game_events": self._ht_extract_events(summary) if summary else [],
         }
@@ -293,7 +306,8 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _ht_parse_dt(game: dict) -> datetime:
         raw = game.get("GameDateISO8601", "")
         try:
-            return datetime.fromisoformat(raw)
+            dt = datetime.fromisoformat(raw)
+            return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
         except (ValueError, TypeError):
             return datetime.min.replace(tzinfo=timezone.utc)
 
@@ -303,6 +317,16 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if not url:
             return None
         return re.sub(r"/logos/\d+x\d+/", "/logos/", url)
+
+    def _my_logo(self) -> str | None:
+        """Return the best available logo URL for the tracked team.
+
+        Prefers the live logo cache (populated from API responses and always
+        upscaled/current) over the URL stored in entry data at setup time.
+        """
+        if self.league == LEAGUE_NHL:
+            return self._nhl_logo(self.team_id)
+        return self._logo_cache.get(self.team_id) or self.team_logo_url
 
     async def _fetch_ht_game_summary(self, game_id: str) -> dict | None:
         """Fetch shot totals and play-by-play events for a live game.
@@ -375,12 +399,7 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "minutes": pen.get("minutes"),
                 })
 
-        def _sort_key(e: dict) -> tuple:
-            parts = e.get("time", "0:00").split(":")
-            t = int(parts[0]) * 60 + int(parts[1]) if len(parts) == 2 else 0
-            return (e.get("period", 0), t)
-
-        events.sort(key=_sort_key, reverse=True)
+        events.sort(key=_event_sort_key, reverse=True)
         return events
 
     async def _fetch_ht(self, params: dict[str, str]) -> dict[str, Any]:
@@ -429,9 +448,9 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         active = self._nhl_find_active(team_games)
 
-        # Fetch gamecenter landing for live games: provides SOG and play-by-play events
+        # Fetch gamecenter landing for live and final games: provides SOG and play-by-play events
         landing = None
-        if active and active.get("gameState") in NHL_LIVE_STATES:
+        if active and active.get("gameState") in NHL_LIVE_STATES | NHL_FINAL_STATES:
             game_id = active.get("id")
             if game_id:
                 landing = await self._fetch_nhl_landing(game_id)
@@ -570,7 +589,7 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "away_shots": away_sog,
             "away_logo_url": self._nhl_logo(away.get("abbrev"), away.get("logo")),
             "is_home": is_home,
-            "team_logo_url": self.team_logo_url,
+            "team_logo_url": self._my_logo(),
             "venue": game.get("venue", {}).get("default"),
             "game_events": self._nhl_extract_events(landing) if landing else [],
         }
@@ -640,12 +659,7 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "minutes": pen.get("duration"),
                 })
 
-        def _sort_key(e: dict) -> tuple:
-            parts = e.get("time", "0:00").split(":")
-            t = int(parts[0]) * 60 + int(parts[1]) if len(parts) == 2 else 0
-            return (e.get("period", 0), t)
-
-        events.sort(key=_sort_key, reverse=True)
+        events.sort(key=_event_sort_key, reverse=True)
         return events
 
     def _nhl_normalize_recent(self, game: dict) -> dict[str, Any]:
@@ -723,7 +737,7 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "away_shots": None,
             "away_logo_url": None,
             "is_home": None,
-            "team_logo_url": self.team_logo_url,
+            "team_logo_url": self._my_logo(),
             "venue": None,
             "game_events": [],
         }
