@@ -58,6 +58,10 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._session: aiohttp.ClientSession | None = None
         self._schedule_cache: list[dict] | None = None
         self._schedule_cache_time: datetime | None = None
+        # Server-side FINAL window tracking — keyed by game_id so it survives
+        # browser refreshes and HA restarts within the same process.
+        self._game_final_at: datetime | None = None
+        self._game_final_id: str | None = None
         # Logo cache keyed by team ID (HockeyTech) or abbreviation (NHL).
         # HockeyTech CDN paths include a version suffix that cannot be constructed
         # from team ID alone, so we populate this from live API responses.
@@ -87,6 +91,22 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 data = await self._fetch_hockeytech()
         except aiohttp.ClientError as err:
             raise UpdateFailed(f"Request failed: {err}") from err
+
+        # Manage the 30-minute post-game FINAL display window server-side.
+        # Tracking by game_id ensures the window is not restarted by browser
+        # refreshes or new HA frontend sessions.
+        if data.get("game_state") == GAME_STATE_FINAL:
+            game_id = str(data.get("game_id", ""))
+            if self._game_final_id != game_id:
+                self._game_final_id = game_id
+                self._game_final_at = datetime.now(timezone.utc)
+            elif self._game_final_at and (
+                datetime.now(timezone.utc) - self._game_final_at
+            ).total_seconds() > 1800:
+                data["game_state"] = GAME_STATE_NONE
+        else:
+            self._game_final_id = None
+            self._game_final_at = None
 
         self.update_interval = timedelta(seconds=self._next_interval(data))
         _LOGGER.debug(
@@ -167,7 +187,7 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return data
 
     def _ht_find_active(self, team_games: list[dict]) -> dict | None:
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=4)
         live = None
         recent_final = None
         pre = None
