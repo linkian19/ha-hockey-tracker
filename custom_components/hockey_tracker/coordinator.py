@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import json
 import logging
 import re
 from typing import Any
@@ -147,7 +148,14 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         recent = self._ht_extract_recent(team_games)
         next_game = await self._get_ht_schedule_cached()
 
-        data = self._ht_normalize_game(active) if active else self._empty_state()
+        # Fetch game summary for live games — provides shots and event feed
+        summary = None
+        if active and str(active.get("GameStatus", "")) not in ("1", "4"):
+            game_id = str(active.get("GameID") or active.get("ID") or "")
+            if game_id:
+                summary = await self._fetch_ht_game_summary(game_id)
+
+        data = self._ht_normalize_game(active, summary) if active else self._empty_state()
         data["recent_games"] = recent
         data["next_game"] = next_game
         return data
@@ -211,7 +219,7 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "venue": g.get("venue_name", ""),
         }
 
-    def _ht_normalize_game(self, game: dict) -> dict[str, Any]:
+    def _ht_normalize_game(self, game: dict, summary: dict | None = None) -> dict[str, Any]:
         status = str(game.get("GameStatus", ""))
         if status == "1":
             game_state = GAME_STATE_PRE
@@ -224,25 +232,33 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         home_id = str(game.get("HomeID", ""))
         away_id = str(game.get("VisitorID", ""))
 
+        # Shots from gameSummary (scorebar has no shot fields)
+        home_shots = None
+        away_shots = None
+        if summary:
+            home_shots = summary.get("homeTeam", {}).get("stats", {}).get("shots")
+            away_shots = summary.get("visitingTeam", {}).get("stats", {}).get("shots")
+
         return {
             "game_state": game_state,
-            "game_id": game.get("GameID"),
+            "game_id": game.get("GameID") or game.get("ID"),
             "start_time": game.get("GameDateISO8601"),
             "period": game.get("Period"),
             "clock": game.get("GameClock"),
             "home_team": f"{game.get('HomeCity','')} {game.get('HomeNickname','')}".strip(),
             "home_team_id": home_id,
             "home_score": game.get("HomeGoals", 0),
-            "home_shots": game.get("HomeShots", 0),
+            "home_shots": home_shots,
             "home_logo_url": self._upscale_ht_logo(game.get("HomeLogo")) or self._logo_cache.get(home_id),
             "away_team": f"{game.get('VisitorCity','')} {game.get('VisitorNickname','')}".strip(),
             "away_team_id": away_id,
             "away_score": game.get("VisitorGoals", 0),
-            "away_shots": game.get("VisitorShots", 0),
+            "away_shots": away_shots,
             "away_logo_url": self._upscale_ht_logo(game.get("VisitorLogo")) or self._logo_cache.get(away_id),
             "is_home": is_home,
             "team_logo_url": self.team_logo_url,
             "venue": game.get("venue_name"),
+            "game_events": self._ht_extract_events(summary) if summary else [],
         }
 
     def _ht_normalize_recent(self, game: dict) -> dict[str, Any]:
@@ -287,6 +303,85 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if not url:
             return None
         return re.sub(r"/logos/\d+x\d+/", "/logos/", url)
+
+    async def _fetch_ht_game_summary(self, game_id: str) -> dict | None:
+        """Fetch shot totals and play-by-play events for a live game.
+
+        The statviewfeed endpoint wraps its JSON in outer parentheses (JSONP
+        style) regardless of fmt=json, so we strip those before parsing.
+        """
+        try:
+            session = await self._get_session()
+            params = {
+                "feed": "statviewfeed",
+                "view": "gameSummary",
+                "game_id": game_id,
+                "key": self.api_key,
+                "client_code": self._client_code,
+                "lang_code": "en",
+                "fmt": "json",
+            }
+            async with session.get(
+                HOCKEYTECH_BASE,
+                params=params,
+                timeout=aiohttp.ClientTimeout(total=15),
+            ) as resp:
+                resp.raise_for_status()
+                text = (await resp.text()).strip()
+                if text.startswith("(") and text.endswith(")"):
+                    text = text[1:-1]
+                return json.loads(text)
+        except Exception as err:
+            _LOGGER.debug("Game summary fetch failed for game %s: %s", game_id, err)
+            return None
+
+    def _ht_extract_events(self, summary: dict) -> list[dict]:
+        """Build a chronological event list (goals + penalties) from a game summary."""
+        events: list[dict] = []
+        for period in summary.get("periods", []):
+            period_num = int(period.get("info", {}).get("id", 0))
+            for goal in period.get("goals", []):
+                team_id = str(goal.get("team", {}).get("id", ""))
+                scorer = goal.get("scoredBy", {})
+                props = goal.get("properties", {})
+                events.append({
+                    "type": "goal",
+                    "period": period_num,
+                    "time": goal.get("time", ""),
+                    "team_abbrev": goal.get("team", {}).get("abbreviation", ""),
+                    "is_tracked_team": team_id == self.team_id,
+                    "player_name": f"{scorer.get('firstName','')} {scorer.get('lastName','')}".strip(),
+                    "player_number": scorer.get("jerseyNumber"),
+                    "assists": [
+                        f"{a.get('firstName','')} {a.get('lastName','')}".strip()
+                        for a in goal.get("assists", [])
+                    ],
+                    "is_power_play": props.get("isPowerPlay") == "1",
+                    "is_short_handed": props.get("isShortHanded") == "1",
+                    "is_empty_net": props.get("isEmptyNet") == "1",
+                })
+            for pen in period.get("penalties", []):
+                team_id = str(pen.get("againstTeam", {}).get("id", ""))
+                player = pen.get("takenBy", {})
+                events.append({
+                    "type": "penalty",
+                    "period": period_num,
+                    "time": pen.get("time", ""),
+                    "team_abbrev": pen.get("againstTeam", {}).get("abbreviation", ""),
+                    "is_tracked_team": team_id == self.team_id,
+                    "player_name": f"{player.get('firstName','')} {player.get('lastName','')}".strip(),
+                    "player_number": player.get("jerseyNumber"),
+                    "description": pen.get("description", ""),
+                    "minutes": pen.get("minutes"),
+                })
+
+        def _sort_key(e: dict) -> tuple:
+            parts = e.get("time", "0:00").split(":")
+            t = int(parts[0]) * 60 + int(parts[1]) if len(parts) == 2 else 0
+            return (e.get("period", 0), t)
+
+        events.sort(key=_sort_key, reverse=True)
+        return events
 
     async def _fetch_ht(self, params: dict[str, str]) -> dict[str, Any]:
         base = {
@@ -540,6 +635,7 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "is_home": None,
             "team_logo_url": self.team_logo_url,
             "venue": None,
+            "game_events": [],
         }
 
     async def _get_session(self) -> aiohttp.ClientSession:

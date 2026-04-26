@@ -68,4 +68,5 @@ class HockeyGameSensor(CoordinatorEntity[HockeyCoordinator], SensorEntity):
             attrs["next_game_venue"] = ng.get("venue")
 
         attrs["recent_games"] = data.get("recent_games", [])
+        attrs["game_events"] = data.get("game_events", [])
         return attrs

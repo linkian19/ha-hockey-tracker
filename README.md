@@ -12,9 +12,10 @@ A [Home Assistant](https://www.home-assistant.io/) custom integration that track
 ## Features
 
 - Live in-game scores, period, and clock display
-- Shots on goal (home and away)
+- Shots on goal (home and away) — ECHL/AHL during live games
 - Game state sensor: `PRE`, `LIVE`, `FINAL`, `NO_GAME`
 - Full-resolution team logos via CDN for all leagues
+- Live game events feed: goals (scorer, assists, PP/SH/EN) and penalties — ECHL/AHL
 - Next upcoming game details (opponent, date/time, venue, logos)
 - Recent game results (up to 10)
 - Adaptive polling — 30 s during live games, up to 2 h when no game is near
@@ -104,6 +105,32 @@ Each configured team creates one sensor entity. The state reflects the current g
 | `next_game_home_logo_url` | Home team logo for next game |
 | `next_game_away_logo_url` | Away team logo for next game |
 | `next_game_venue` | Arena for next game |
+
+#### Game events (ECHL / AHL live games only)
+
+| Attribute | Description |
+|-----------|-------------|
+| `game_events` | List of goals and penalties from the current game, most recent first |
+
+Each entry in `game_events`:
+
+| Field | Description |
+|-------|-------------|
+| `type` | `"goal"` or `"penalty"` |
+| `period` | Period number |
+| `time` | Clock time within the period |
+| `team_abbrev` | Short team code |
+| `is_tracked_team` | `true` if the event involves your tracked team |
+| `player_name` | Player's full name |
+| `player_number` | Jersey number |
+| `assists` | (Goals only) List of assisting player names |
+| `is_power_play` | (Goals only) `true` if power play goal |
+| `is_short_handed` | (Goals only) `true` if shorthanded goal |
+| `is_empty_net` | (Goals only) `true` if empty net goal |
+| `description` | (Penalties only) Infraction description |
+| `minutes` | (Penalties only) Penalty duration in minutes |
+
+> **Note:** Game events require a second API call to the HockeyTech game summary endpoint and are only populated during live ECHL/AHL games. NHL and pre/post-game states return an empty list.
 
 #### Recent games
 
