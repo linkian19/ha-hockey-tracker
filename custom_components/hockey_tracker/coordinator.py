@@ -428,11 +428,19 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         ]
 
         active = self._nhl_find_active(team_games)
+
+        # Fetch gamecenter landing for live games: provides SOG and play-by-play events
+        landing = None
+        if active and active.get("gameState") in NHL_LIVE_STATES:
+            game_id = active.get("id")
+            if game_id:
+                landing = await self._fetch_nhl_landing(game_id)
+
         schedule_games = await self._get_nhl_schedule_cached()
         recent = self._nhl_extract_recent(schedule_games)
         next_game = self._nhl_first_upcoming(schedule_games)
 
-        data = self._nhl_normalize_game(active) if active else self._empty_state()
+        data = self._nhl_normalize_game(active, landing) if active else self._empty_state()
         data["recent_games"] = recent
         data["next_game"] = next_game
         return data
@@ -519,7 +527,7 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         completed.sort(key=self._nhl_parse_dt, reverse=True)
         return [self._nhl_normalize_recent(g) for g in completed[:RECENT_GAMES_MAX]]
 
-    def _nhl_normalize_game(self, game: dict) -> dict[str, Any]:
+    def _nhl_normalize_game(self, game: dict, landing: dict | None = None) -> dict[str, Any]:
         away = game.get("awayTeam", {})
         home = game.get("homeTeam", {})
         raw_state = game.get("gameState", "")
@@ -537,6 +545,14 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         clock = "INT" if clock_data.get("inIntermission") else clock_data.get("timeRemaining")
         is_home = home.get("abbrev") == self.team_id
 
+        # SOG from landing (scoreboard omits sog); fall back to scoreboard field if present
+        if landing:
+            away_sog = landing.get("awayTeam", {}).get("sog", away.get("sog"))
+            home_sog = landing.get("homeTeam", {}).get("sog", home.get("sog"))
+        else:
+            away_sog = away.get("sog")
+            home_sog = home.get("sog")
+
         return {
             "game_state": game_state,
             "game_id": game.get("id"),
@@ -546,17 +562,91 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "home_team": self._nhl_full_name(home),
             "home_team_id": home.get("abbrev"),
             "home_score": home.get("score", 0),
-            "home_shots": home.get("sog"),
+            "home_shots": home_sog,
             "home_logo_url": self._nhl_logo(home.get("abbrev"), home.get("logo")),
             "away_team": self._nhl_full_name(away),
             "away_team_id": away.get("abbrev"),
             "away_score": away.get("score", 0),
-            "away_shots": away.get("sog"),
+            "away_shots": away_sog,
             "away_logo_url": self._nhl_logo(away.get("abbrev"), away.get("logo")),
             "is_home": is_home,
             "team_logo_url": self.team_logo_url,
             "venue": game.get("venue", {}).get("default"),
+            "game_events": self._nhl_extract_events(landing) if landing else [],
         }
+
+    async def _fetch_nhl_landing(self, game_id: int) -> dict | None:
+        """Fetch NHL gamecenter landing page — provides SOG and scoring/penalty events."""
+        try:
+            return await self._fetch_json(f"{NHL_API_BASE}/gamecenter/{game_id}/landing")
+        except Exception as err:
+            _LOGGER.debug("NHL landing fetch failed for game %s: %s", game_id, err)
+            return None
+
+    def _nhl_extract_events(self, landing: dict) -> list[dict]:
+        """Build a chronological event list (goals + penalties) from NHL landing data."""
+        events: list[dict] = []
+        summ = landing.get("summary", {})
+
+        for period_data in summ.get("scoring", []):
+            period_num = (
+                period_data.get("periodDescriptor", {}).get("number")
+                or period_data.get("period", 0)
+            )
+            for goal in period_data.get("goals", []):
+                team_abbrev = goal.get("teamAbbrev", {}).get("default", "")
+                strength = goal.get("strength", "ev")
+                # Detect empty net: situationCode digit indicates 6 skaters (pulled goalie)
+                situation = goal.get("situationCode", "")
+                is_empty_net = "6" in situation
+                events.append({
+                    "type": "goal",
+                    "period": period_num,
+                    "time": goal.get("timeInPeriod", ""),
+                    "team_abbrev": team_abbrev,
+                    "is_tracked_team": team_abbrev == self.team_id,
+                    "player_name": (
+                        f"{goal.get('firstName',{}).get('default','')} "
+                        f"{goal.get('lastName',{}).get('default','')}".strip()
+                    ),
+                    "player_number": None,
+                    "assists": [
+                        f"{a.get('firstName',{}).get('default','')} {a.get('lastName',{}).get('default','')}".strip()
+                        for a in goal.get("assists", [])
+                    ],
+                    "is_power_play": strength == "pp",
+                    "is_short_handed": strength == "sh",
+                    "is_empty_net": is_empty_net,
+                })
+
+        for period_data in summ.get("penalties", []):
+            period_num = period_data.get("periodDescriptor", {}).get("number", 0)
+            for pen in period_data.get("penalties", []):
+                team_abbrev = pen.get("teamAbbrev", {}).get("default", "")
+                player = pen.get("committedByPlayer", {})
+                desc_key = pen.get("descKey", "")
+                events.append({
+                    "type": "penalty",
+                    "period": period_num,
+                    "time": pen.get("timeInPeriod", ""),
+                    "team_abbrev": team_abbrev,
+                    "is_tracked_team": team_abbrev == self.team_id,
+                    "player_name": (
+                        f"{player.get('firstName',{}).get('default','')} "
+                        f"{player.get('lastName',{}).get('default','')}".strip()
+                    ),
+                    "player_number": player.get("sweaterNumber"),
+                    "description": desc_key.replace("-", " ").title(),
+                    "minutes": pen.get("duration"),
+                })
+
+        def _sort_key(e: dict) -> tuple:
+            parts = e.get("time", "0:00").split(":")
+            t = int(parts[0]) * 60 + int(parts[1]) if len(parts) == 2 else 0
+            return (e.get("period", 0), t)
+
+        events.sort(key=_sort_key, reverse=True)
+        return events
 
     def _nhl_normalize_recent(self, game: dict) -> dict[str, Any]:
         away = game.get("awayTeam", {})

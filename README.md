@@ -12,10 +12,10 @@ A [Home Assistant](https://www.home-assistant.io/) custom integration that track
 ## Features
 
 - Live in-game scores, period, and clock display
-- Shots on goal (home and away) — ECHL/AHL during live games
+- Shots on goal (home and away) — all three leagues during live games
 - Game state sensor: `PRE`, `LIVE`, `FINAL`, `NO_GAME`
 - Full-resolution team logos via CDN for all leagues
-- Live game events feed: goals (scorer, assists, PP/SH/EN) and penalties — ECHL/AHL
+- Live game events feed: goals (scorer, assists, PP/SH/EN) and penalties — all three leagues
 - Next upcoming game details (opponent, date/time, venue, logos)
 - Recent game results (up to 10)
 - Adaptive polling — 30 s during live games, up to 2 h when no game is near
@@ -130,7 +130,7 @@ Each entry in `game_events`:
 | `description` | (Penalties only) Infraction description |
 | `minutes` | (Penalties only) Penalty duration in minutes |
 
-> **Note:** Game events require a second API call to the HockeyTech game summary endpoint and are only populated during live ECHL/AHL games. NHL and pre/post-game states return an empty list.
+> **Note:** Game events require a second API call and are only populated during live games. ECHL/AHL uses the HockeyTech `gameSummary` endpoint; NHL uses the `gamecenter/{id}/landing` endpoint. Pre-game and post-game states return an empty list. NHL goal entries have no jersey number (the NHL API does not include it in the scoring summary).
 
 #### Recent games
 
@@ -200,6 +200,7 @@ automation:
 
 - No API key required; data comes from the public `api-web.nhle.com/v1` API.
 - Team logos are fetched from the NHL CDN at startup and cached for the session.
+- During live games, a second call to `gamecenter/{id}/landing` provides shots on goal and the play-by-play events feed. The scoreboard endpoint does not include SOG.
 - During the off-season or after a team is eliminated from the playoffs, the sensor state is `NO_GAME` with no `next_game` attributes. The companion card will show the team logo and "No upcoming games scheduled" in this state.
 
 ### ECHL / AHL
