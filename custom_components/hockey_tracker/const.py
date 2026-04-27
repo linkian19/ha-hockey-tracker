@@ -73,7 +73,7 @@ NHL_PRE_STATES = {"FUT", "PRE"}
 # Game summary URLs for each league
 # HockeyTech: official printable game summary (goals, penalties, shots)
 HOCKEYTECH_GAME_REPORT_URL = (
-    "https://lscluster.hockeytech.com/game_reports/official-game-summary.php"
-    "?client_code={client_code}&game_id={game_id}&lang_code=en"
+    "https://lscluster.hockeytech.com/game_reports/official-game-report.php"
+    "?client_code={client_code}&game_id={game_id}"
 )
 NHL_GAME_URL = "https://www.nhl.com/gamecenter/{game_id}"
