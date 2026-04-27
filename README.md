@@ -17,8 +17,12 @@ A [Home Assistant](https://www.home-assistant.io/) custom integration that track
 - Full-resolution team logos via CDN for all leagues
 - Live game events feed: goals (scorer, assists, PP/SH/EN) and penalties — all three leagues
 - Next upcoming game details (opponent, date/time, venue, logos)
-- Recent game results (up to 10)
-- Adaptive polling — 30 s during live games, up to 2 h when no game is near
+- Recent game results (up to 10) with links to official game summaries
+- Adaptive polling — 15 s at end of regulation, 30 s during live games, up to 2 h when no game is near
+- 2-hour post-game FINAL window — final score stays visible well after the buzzer
+- `last_fetched` attribute — always know how fresh the data is
+- Built-in notifications — win, pre-game, and goal alerts via any HA notify service
+- `hockey_tracker.force_refresh` service — clears cache and hard-pulls fresh data on demand
 
 ---
 
@@ -59,6 +63,38 @@ A [Home Assistant](https://www.home-assistant.io/) custom integration that track
 
 ---
 
+## Notifications
+
+After setup, configure alerts at **Settings → Devices & Services → Hockey Tracker → Configure**.
+
+| Notification | When it fires |
+|--------------|---------------|
+| **Win** | Once when the tracked team's game ends in a win — includes final score |
+| **Pre-game** | Once per game when puck drop is 35 minutes or fewer away |
+| **Goal** | Each time the tracked team scores during live play — includes scorer, strength (PP/SH/EN), period/time, and current score |
+
+Each type has an independent enable toggle and a multi-select list of your configured HA notify services (mobile apps, persistent notification, etc.). Select as many targets as you like per type.
+
+Alerts are deduplicated by game ID — they never fire twice for the same event even if HA restarts mid-game.
+
+---
+
+## Services
+
+### `hockey_tracker.force_refresh`
+
+Clears the schedule and logo cache, then immediately fetches fresh data from the API. Unlike `homeassistant.update_entity`, this bypasses the 1-hour schedule cache so next-game info and logos are always re-fetched.
+
+```yaml
+service: hockey_tracker.force_refresh
+data:
+  entity_id: sensor.coachella_valley_firebirds_game
+```
+
+The companion card's refresh button calls this service automatically.
+
+---
+
 ## Sensor
 
 Each configured team creates one sensor entity. The state reflects the current game status:
@@ -67,8 +103,8 @@ Each configured team creates one sensor entity. The state reflects the current g
 |-------|---------|
 | `PRE` | Game scheduled but not yet started |
 | `LIVE` | Game currently in progress |
-| `FINAL` | Game has ended |
-| `NO_GAME` | No game today — next game info is in attributes (absent during off-season) |
+| `FINAL` | Game has ended (shown for up to 2 hours after the final horn) |
+| `NO_GAME` | No active or recent game — next game info is in attributes |
 
 ### Attributes
 
@@ -94,6 +130,7 @@ Each configured team creates one sensor entity. The state reflects the current g
 | `team_logo_url` | Your tracked team's logo URL |
 | `team_name` | Full name of your tracked team |
 | `venue` | Arena name |
+| `last_fetched` | ISO 8601 UTC timestamp of the most recent successful data pull |
 
 #### Next game (always present when available)
 
@@ -107,7 +144,7 @@ Each configured team creates one sensor entity. The state reflects the current g
 | `next_game_away_logo_url` | Away team logo for next game |
 | `next_game_venue` | Arena for next game |
 
-#### Game events (ECHL / AHL live games only)
+#### Game events (all leagues, live and final games)
 
 | Attribute | Description |
 |-----------|-------------|
@@ -123,7 +160,7 @@ Each entry in `game_events`:
 | `team_abbrev` | Short team code |
 | `is_tracked_team` | `true` if the event involves your tracked team |
 | `player_name` | Player's full name |
-| `player_number` | Jersey number |
+| `player_number` | Jersey number (not available for NHL goals) |
 | `assists` | (Goals only) List of assisting player names |
 | `is_power_play` | (Goals only) `true` if power play goal |
 | `is_short_handed` | (Goals only) `true` if shorthanded goal |
@@ -131,7 +168,7 @@ Each entry in `game_events`:
 | `description` | (Penalties only) Infraction description |
 | `minutes` | (Penalties only) Penalty duration in minutes |
 
-> **Note:** Game events require a second API call and are only populated during live games. ECHL/AHL uses the HockeyTech `gameSummary` endpoint; NHL uses the `gamecenter/{id}/landing` endpoint. Pre-game and post-game states return an empty list. NHL goal entries have no jersey number (the NHL API does not include it in the scoring summary).
+> Events are populated during live and final games via a second API call. ECHL/AHL uses the HockeyTech `gameSummary` endpoint; NHL uses `gamecenter/{id}/landing`. Pre-game and no-game states return an empty list.
 
 #### Recent games
 
@@ -151,6 +188,7 @@ Each entry in `recent_games`:
 | `win` | `true` if your team won |
 | `is_home` | `true` if your team was home |
 | `venue` | Arena name |
+| `game_url` | Link to the official game summary (NHL: nhl.com/gamecenter; ECHL/AHL: HockeyTech report) |
 
 ---
 
@@ -160,6 +198,7 @@ The integration automatically adjusts how often it polls based on game state:
 
 | Situation | Interval |
 |-----------|----------|
+| Game in progress, clock at 0:00 in period ≥ 3 | 15 seconds |
 | Game in progress (LIVE) | 30 seconds |
 | Game today, not yet started (PRE) | 5 minutes |
 | Game just ended (FINAL) | 15 minutes |
@@ -167,31 +206,7 @@ The integration automatically adjusts how often it polls based on game state:
 | Next game within 24 hours | 30 minutes |
 | Next game tomorrow or later | 2 hours |
 
----
-
-## Example Automation
-
-```yaml
-automation:
-  - alias: "Alert when team scores"
-    trigger:
-      - platform: state
-        entity_id: sensor.kansas_city_mavericks_game
-    condition:
-      - condition: template
-        value_template: >
-          {% set a = trigger.to_state.attributes %}
-          {% set b = trigger.from_state.attributes %}
-          {{ trigger.to_state.state == 'LIVE' and
-             (a.home_score | int > b.home_score | int and a.is_home) or
-             (a.away_score | int > b.away_score | int and not a.is_home) }}
-    action:
-      - service: notify.mobile_app
-        data:
-          message: >
-            {% set a = trigger.to_state.attributes %}
-            {{ a.away_team }} {{ a.away_score }} – {{ a.home_score }} {{ a.home_team }}
-```
+The 15-second end-of-regulation interval ensures FINAL is detected as quickly as possible after the API updates.
 
 ---
 
@@ -201,13 +216,13 @@ automation:
 
 - No API key required; data comes from the public `api-web.nhle.com/v1` API.
 - Team logos are fetched from the NHL CDN at startup and cached for the session.
-- During live games, a second call to `gamecenter/{id}/landing` provides shots on goal and the play-by-play events feed. The scoreboard endpoint does not include SOG.
-- During the off-season or after a team is eliminated from the playoffs, the sensor state is `NO_GAME` with no `next_game` attributes. The companion card will show the team logo and "No upcoming games scheduled" in this state.
+- During live and final games, a second call to `gamecenter/{id}/landing` provides shots on goal and the play-by-play events feed.
+- During the off-season or after a team is eliminated from the playoffs, the sensor state is `NO_GAME` with no `next_game` attributes.
 
 ### ECHL / AHL
 
 - The integration uses the HockeyTech API key embedded in the official league apps. Known keys are pre-filled. If a league rotates its key, see the [Configuration](#configuration) section for how to find the updated key.
-- Logo CDN URLs include a version suffix that is team-specific (e.g. `319_92.png`). The integration discovers these from live API responses and caches them — all logos load at full resolution.
+- Logo CDN URLs include a version suffix that is team-specific. The integration discovers these from live API responses and caches them — all logos load at full resolution.
 
 ---
 
