@@ -32,5 +32,21 @@
     "abort": {
       "already_configured": "This team is already configured."
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Hockey Tracker — Notifications",
+        "description": "Enter notify service names as a comma-separated list (e.g. notify.mobile_app_my_phone, notify.persistent_notification). Leave blank to disable a notification type.",
+        "data": {
+          "notify_win_enabled": "Notify when tracked team wins",
+          "notify_win_targets": "Win notification targets",
+          "notify_pregame_enabled": "Notify 30 minutes before puck drop",
+          "notify_pregame_targets": "Pre-game notification targets",
+          "notify_goal_enabled": "Notify when tracked team scores",
+          "notify_goal_targets": "Goal notification targets"
+        }
+      }
+    }
   }
 }

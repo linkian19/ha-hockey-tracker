@@ -7,11 +7,18 @@ from typing import Any
 import aiohttp
 import voluptuous as vol
 
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
+from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
+from homeassistant.core import callback
 
 from .const import (
     CONF_API_KEY,
     CONF_LEAGUE,
+    CONF_NOTIFY_GOAL_ENABLED,
+    CONF_NOTIFY_GOAL_TARGETS,
+    CONF_NOTIFY_PREGAME_ENABLED,
+    CONF_NOTIFY_PREGAME_TARGETS,
+    CONF_NOTIFY_WIN_ENABLED,
+    CONF_NOTIFY_WIN_TARGETS,
     CONF_TEAM_ID,
     CONF_TEAM_NAME,
     DOMAIN,
@@ -97,6 +104,11 @@ class HockeyTrackerConfigFlow(ConfigFlow, domain=DOMAIN):
         self._league: str = ""
         self._api_key: str = ""
         self._teams: list[dict] = []
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
+        return HockeyTrackerOptionsFlow(config_entry)
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -197,4 +209,53 @@ class HockeyTrackerConfigFlow(ConfigFlow, domain=DOMAIN):
             step_id="team",
             data_schema=vol.Schema({vol.Required(CONF_TEAM_ID): vol.In(team_options)}),
             errors=errors,
+        )
+
+
+class HockeyTrackerOptionsFlow(OptionsFlow):
+    """Options flow for configuring Hockey Tracker notifications."""
+
+    def __init__(self, config_entry: ConfigEntry) -> None:
+        self._entry = config_entry
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        if user_input is not None:
+            return self.async_create_entry(title="", data=user_input)
+
+        opts = self._entry.options
+        schema = vol.Schema({
+            vol.Optional(
+                CONF_NOTIFY_WIN_ENABLED,
+                default=opts.get(CONF_NOTIFY_WIN_ENABLED, False),
+            ): bool,
+            vol.Optional(
+                CONF_NOTIFY_WIN_TARGETS,
+                default=opts.get(CONF_NOTIFY_WIN_TARGETS, ""),
+            ): str,
+            vol.Optional(
+                CONF_NOTIFY_PREGAME_ENABLED,
+                default=opts.get(CONF_NOTIFY_PREGAME_ENABLED, False),
+            ): bool,
+            vol.Optional(
+                CONF_NOTIFY_PREGAME_TARGETS,
+                default=opts.get(CONF_NOTIFY_PREGAME_TARGETS, ""),
+            ): str,
+            vol.Optional(
+                CONF_NOTIFY_GOAL_ENABLED,
+                default=opts.get(CONF_NOTIFY_GOAL_ENABLED, False),
+            ): bool,
+            vol.Optional(
+                CONF_NOTIFY_GOAL_TARGETS,
+                default=opts.get(CONF_NOTIFY_GOAL_TARGETS, ""),
+            ): str,
+        })
+
+        return self.async_show_form(
+            step_id="init",
+            data_schema=schema,
+            description_placeholders={
+                "format_hint": "notify.mobile_app_your_phone, notify.another_device",
+            },
         )

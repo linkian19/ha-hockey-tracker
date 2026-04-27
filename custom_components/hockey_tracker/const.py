@@ -32,13 +32,26 @@ CONF_TEAM_ID = "team_id"
 CONF_TEAM_NAME = "team_name"
 CONF_LEAGUE = "league"
 
+# Notification option config keys
+CONF_NOTIFY_WIN_ENABLED = "notify_win_enabled"
+CONF_NOTIFY_WIN_TARGETS = "notify_win_targets"
+CONF_NOTIFY_PREGAME_ENABLED = "notify_pregame_enabled"
+CONF_NOTIFY_PREGAME_TARGETS = "notify_pregame_targets"
+CONF_NOTIFY_GOAL_ENABLED = "notify_goal_enabled"
+CONF_NOTIFY_GOAL_TARGETS = "notify_goal_targets"
+
 # Polling intervals (seconds)
 SCAN_INTERVAL_LIVE = 30
+SCAN_INTERVAL_GAME_ENDING = 15  # extra-fast poll when clock hits 0:00 in period ≥ 3
 SCAN_INTERVAL_PRE = 300
 SCAN_INTERVAL_FINAL = 900
 SCAN_INTERVAL_GAME_SOON = 900
 SCAN_INTERVAL_GAME_TODAY = 1800
 SCAN_INTERVAL_IDLE = 7200
+
+# How long (seconds) to keep showing the final scoreboard after a game ends.
+# Server-side; card relies entirely on this window.
+FINAL_DISPLAY_SECONDS = 7200  # 2 hours
 
 # Schedule cache TTL (seconds)
 SCHEDULE_CACHE_TTL = 3600
@@ -56,3 +69,11 @@ GAME_STATE_NONE = "NO_GAME"
 NHL_LIVE_STATES = {"LIVE", "CRIT"}
 NHL_FINAL_STATES = {"FINAL", "OFF"}
 NHL_PRE_STATES = {"FUT", "PRE"}
+
+# Game summary URLs for each league
+# HockeyTech: official printable game summary (goals, penalties, shots)
+HOCKEYTECH_GAME_REPORT_URL = (
+    "https://lscluster.hockeytech.com/game_reports/official-game-summary.php"
+    "?client_code={client_code}&game_id={game_id}&lang_code=en"
+)
+NHL_GAME_URL = "https://www.nhl.com/gamecenter/{game_id}"

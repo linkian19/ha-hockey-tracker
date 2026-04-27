@@ -16,21 +16,31 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from .const import (
     CONF_API_KEY,
     CONF_LEAGUE,
+    CONF_NOTIFY_GOAL_ENABLED,
+    CONF_NOTIFY_GOAL_TARGETS,
+    CONF_NOTIFY_PREGAME_ENABLED,
+    CONF_NOTIFY_PREGAME_TARGETS,
+    CONF_NOTIFY_WIN_ENABLED,
+    CONF_NOTIFY_WIN_TARGETS,
     CONF_TEAM_ID,
     DOMAIN,
+    FINAL_DISPLAY_SECONDS,
     GAME_STATE_FINAL,
     GAME_STATE_LIVE,
     GAME_STATE_NONE,
     GAME_STATE_PRE,
     HOCKEYTECH_BASE,
+    HOCKEYTECH_GAME_REPORT_URL,
     HOCKEYTECH_LEAGUES,
     LEAGUE_NHL,
     NHL_API_BASE,
     NHL_FINAL_STATES,
+    NHL_GAME_URL,
     NHL_LIVE_STATES,
     NHL_PRE_STATES,
     RECENT_GAMES_MAX,
     SCAN_INTERVAL_FINAL,
+    SCAN_INTERVAL_GAME_ENDING,
     SCAN_INTERVAL_GAME_SOON,
     SCAN_INTERVAL_GAME_TODAY,
     SCAN_INTERVAL_IDLE,
@@ -52,6 +62,7 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """Polls game data with adaptive update intervals. Supports ECHL, AHL, and NHL."""
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+        self._entry = entry
         self.league: str = entry.data[CONF_LEAGUE]
         self.team_id: str = entry.data[CONF_TEAM_ID]
         self.team_logo_url: str | None = entry.data.get("team_logo_url")
@@ -66,6 +77,11 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # HockeyTech CDN paths include a version suffix that cannot be constructed
         # from team ID alone, so we populate this from live API responses.
         self._logo_cache: dict[str, str] = {}
+        # Notification state — prevents duplicate alerts for the same event.
+        self._notif_pregame_sent_id: str | None = None
+        self._notif_win_sent_id: str | None = None
+        self._notif_goal_count: int = 0
+        self._notif_goal_game_id: str | None = None
 
         if self.league in HOCKEYTECH_LEAGUES:
             self.api_key: str = entry.data[CONF_API_KEY]
@@ -78,6 +94,14 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             name=DOMAIN,
             update_interval=timedelta(seconds=SCAN_INTERVAL_IDLE),
         )
+
+    def _notif_opts(self) -> dict:
+        return self._entry.options
+
+    def clear_schedule_cache(self) -> None:
+        """Force the next update to re-fetch schedule/logo data from the API."""
+        self._schedule_cache = None
+        self._schedule_cache_time = None
 
     # ------------------------------------------------------------------
     # Coordinator lifecycle
@@ -92,7 +116,11 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except aiohttp.ClientError as err:
             raise UpdateFailed(f"Request failed: {err}") from err
 
-        # Manage the 30-minute post-game FINAL display window server-side.
+        # Fire notifications before any state transitions so win/goal
+        # alerts fire the first time FINAL/goals are seen.
+        await self._maybe_notify(data)
+
+        # Manage the post-game FINAL display window server-side.
         # Tracking by game_id ensures the window is not restarted by browser
         # refreshes or new HA frontend sessions.
         if data.get("game_state") == GAME_STATE_FINAL:
@@ -102,11 +130,13 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._game_final_at = datetime.now(timezone.utc)
             elif self._game_final_at and (
                 datetime.now(timezone.utc) - self._game_final_at
-            ).total_seconds() > 1800:
+            ).total_seconds() > FINAL_DISPLAY_SECONDS:
                 data["game_state"] = GAME_STATE_NONE
         else:
             self._game_final_id = None
             self._game_final_at = None
+
+        data["last_fetched"] = datetime.now(timezone.utc).isoformat()
 
         self.update_interval = timedelta(seconds=self._next_interval(data))
         _LOGGER.debug(
@@ -119,6 +149,12 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _next_interval(self, data: dict) -> int:
         state = data.get("game_state")
         if state == GAME_STATE_LIVE:
+            # Poll extra-fast when clock hits 0:00 in period ≥ 3 so FINAL
+            # is detected as soon as the API updates the game status.
+            period = data.get("period")
+            clock = data.get("clock")
+            if period and period >= 3 and clock == "0:00":
+                return SCAN_INTERVAL_GAME_ENDING
             return SCAN_INTERVAL_LIVE
         if state == GAME_STATE_PRE:
             return SCAN_INTERVAL_PRE
@@ -311,6 +347,7 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         away_goals = int(game.get("VisitorGoals") or 0)
         team_score = home_goals if is_home else away_goals
         opp_score = away_goals if is_home else home_goals
+        game_id = game.get("GameID") or game.get("ID")
         return {
             "date": game.get("GameDateISO8601"),
             "opponent": opp_name,
@@ -320,6 +357,9 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "is_home": is_home,
             "venue": game.get("venue_name"),
             "win": team_score > opp_score,
+            "game_url": HOCKEYTECH_GAME_REPORT_URL.format(
+                client_code=self._client_code, game_id=game_id
+            ) if game_id else None,
         }
 
     @staticmethod
@@ -689,6 +729,7 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         opp = away if is_home else home
         team_score = int(home.get("score") or 0) if is_home else int(away.get("score") or 0)
         opp_score = int(away.get("score") or 0) if is_home else int(home.get("score") or 0)
+        game_id = game.get("id")
         return {
             "date": game.get("startTimeUTC") or game.get("gameDate"),
             "opponent": self._nhl_full_name(opp),
@@ -698,6 +739,7 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "is_home": is_home,
             "venue": game.get("venue", {}).get("default"),
             "win": team_score > opp_score,
+            "game_url": NHL_GAME_URL.format(game_id=game_id) if game_id else None,
         }
 
     @staticmethod
@@ -734,6 +776,87 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
             resp.raise_for_status()
             return await resp.json(content_type=None)
+
+    # ------------------------------------------------------------------
+    # Notifications
+    # ------------------------------------------------------------------
+
+    async def _maybe_notify(self, data: dict) -> None:
+        """Fire HA notify services for win, pre-game, and goal events."""
+        opts = self._notif_opts()
+        state = data.get("game_state")
+        game_id = str(data.get("game_id") or "")
+        is_home = data.get("is_home")
+        our_score = data.get("home_score") if is_home else data.get("away_score")
+        opp_score = data.get("away_score") if is_home else data.get("home_score")
+        our_team = data.get("home_team") if is_home else data.get("away_team")
+        opp_team = data.get("away_team") if is_home else data.get("home_team")
+
+        # Pre-game notification: fire once per game_id when within 35 min of puck drop
+        if opts.get(CONF_NOTIFY_PREGAME_ENABLED) and game_id and game_id != self._notif_pregame_sent_id:
+            targets = [s.strip() for s in opts.get(CONF_NOTIFY_PREGAME_TARGETS, "").split(",") if s.strip()]
+            if targets and state == GAME_STATE_PRE and data.get("start_time"):
+                try:
+                    start = datetime.fromisoformat(data["start_time"].replace("Z", "+00:00"))
+                    mins_until = (start - datetime.now(timezone.utc)).total_seconds() / 60
+                    if 0 <= mins_until <= 35:
+                        msg = f"{our_team} vs {opp_team} starts in {int(mins_until)} minutes!"
+                        await self._send_notifications(targets, "Hockey: Game Starting Soon", msg)
+                        self._notif_pregame_sent_id = game_id
+                except (ValueError, TypeError):
+                    pass
+
+        # Goal notification: fire for each new tracked-team goal during live play
+        if opts.get(CONF_NOTIFY_GOAL_ENABLED) and state == GAME_STATE_LIVE and game_id:
+            targets = [s.strip() for s in opts.get(CONF_NOTIFY_GOAL_TARGETS, "").split(",") if s.strip()]
+            if targets:
+                if game_id != self._notif_goal_game_id:
+                    self._notif_goal_game_id = game_id
+                    self._notif_goal_count = 0
+                our_goals = [
+                    e for e in data.get("game_events", [])
+                    if e.get("type") == "goal" and e.get("is_tracked_team")
+                ]
+                if len(our_goals) > self._notif_goal_count:
+                    # New goals are at the front of the newest-first sorted list
+                    new_goals = our_goals[:len(our_goals) - self._notif_goal_count]
+                    for goal in new_goals:
+                        scorer = goal.get("player_name", "")
+                        period = goal.get("period", "")
+                        time_str = goal.get("time", "")
+                        tag = (
+                            " (PP)" if goal.get("is_power_play")
+                            else " (SH)" if goal.get("is_short_handed")
+                            else " (EN)" if goal.get("is_empty_net")
+                            else ""
+                        )
+                        score_str = f"{our_score}–{opp_score}" if our_score is not None else ""
+                        msg = f"{scorer}{tag} — P{period} {time_str}" + (f" | {score_str}" if score_str else "")
+                        await self._send_notifications(targets, f"GOAL! {our_team} scores!", msg)
+                    self._notif_goal_count = len(our_goals)
+
+        # Win notification: fire once when FINAL and tracked team won
+        if opts.get(CONF_NOTIFY_WIN_ENABLED) and game_id and game_id != self._notif_win_sent_id:
+            targets = [s.strip() for s in opts.get(CONF_NOTIFY_WIN_TARGETS, "").split(",") if s.strip()]
+            if targets and state == GAME_STATE_FINAL:
+                if our_score is not None and opp_score is not None and our_score > opp_score:
+                    msg = f"Final: {our_team} {our_score}, {opp_team} {opp_score}. {our_team} wins!"
+                    await self._send_notifications(targets, f"{our_team} Wins!", msg)
+                    self._notif_win_sent_id = game_id
+
+    async def _send_notifications(self, targets: list[str], title: str, message: str) -> None:
+        for target in targets:
+            try:
+                parts = target.rsplit(".", 1)
+                domain = parts[0] if len(parts) == 2 else "notify"
+                service_name = parts[1] if len(parts) == 2 else parts[0]
+                await self.hass.services.async_call(
+                    domain, service_name,
+                    {"title": title, "message": message},
+                    blocking=False,
+                )
+            except Exception as err:
+                _LOGGER.warning("Failed to send notification to %s: %s", target, err)
 
     # ------------------------------------------------------------------
     # Shared helpers
