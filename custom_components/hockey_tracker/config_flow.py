@@ -248,7 +248,7 @@ class HockeyTrackerOptionsFlow(OptionsFlow):
 
         def _target_sel() -> SelectSelector:
             return SelectSelector(SelectSelectorConfig(
-                options=notify_options, multiple=True, mode=SelectSelectorMode.LIST
+                options=notify_options, multiple=True, mode=SelectSelectorMode.DROPDOWN
             ))
 
         schema = vol.Schema({
