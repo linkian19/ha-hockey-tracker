@@ -9,6 +9,12 @@ import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
 from homeassistant.core import callback
+from homeassistant.helpers.selector import (
+    BooleanSelector,
+    SelectSelector,
+    SelectSelectorConfig,
+    SelectSelectorMode,
+)
 
 from .const import (
     CONF_API_KEY,
@@ -225,37 +231,51 @@ class HockeyTrackerOptionsFlow(OptionsFlow):
             return self.async_create_entry(title="", data=user_input)
 
         opts = self._entry.options
+
+        # Build options list from all registered notify services so the user
+        # can pick from a multi-select rather than typing service names manually.
+        notify_options = sorted(
+            f"notify.{name}"
+            for name in self.hass.services.async_services().get("notify", {})
+        )
+
+        def _targets_default(key: str) -> list[str]:
+            """Return current targets as a list, migrating legacy comma-string if needed."""
+            val = opts.get(key, [])
+            if isinstance(val, str):
+                return [s.strip() for s in val.split(",") if s.strip()]
+            return list(val)
+
+        def _target_sel() -> SelectSelector:
+            return SelectSelector(SelectSelectorConfig(
+                options=notify_options, multiple=True, mode=SelectSelectorMode.LIST
+            ))
+
         schema = vol.Schema({
             vol.Optional(
                 CONF_NOTIFY_WIN_ENABLED,
                 default=opts.get(CONF_NOTIFY_WIN_ENABLED, False),
-            ): bool,
+            ): BooleanSelector(),
             vol.Optional(
                 CONF_NOTIFY_WIN_TARGETS,
-                default=opts.get(CONF_NOTIFY_WIN_TARGETS, ""),
-            ): str,
+                default=_targets_default(CONF_NOTIFY_WIN_TARGETS),
+            ): _target_sel(),
             vol.Optional(
                 CONF_NOTIFY_PREGAME_ENABLED,
                 default=opts.get(CONF_NOTIFY_PREGAME_ENABLED, False),
-            ): bool,
+            ): BooleanSelector(),
             vol.Optional(
                 CONF_NOTIFY_PREGAME_TARGETS,
-                default=opts.get(CONF_NOTIFY_PREGAME_TARGETS, ""),
-            ): str,
+                default=_targets_default(CONF_NOTIFY_PREGAME_TARGETS),
+            ): _target_sel(),
             vol.Optional(
                 CONF_NOTIFY_GOAL_ENABLED,
                 default=opts.get(CONF_NOTIFY_GOAL_ENABLED, False),
-            ): bool,
+            ): BooleanSelector(),
             vol.Optional(
                 CONF_NOTIFY_GOAL_TARGETS,
-                default=opts.get(CONF_NOTIFY_GOAL_TARGETS, ""),
-            ): str,
+                default=_targets_default(CONF_NOTIFY_GOAL_TARGETS),
+            ): _target_sel(),
         })
 
-        return self.async_show_form(
-            step_id="init",
-            data_schema=schema,
-            description_placeholders={
-                "format_hint": "notify.mobile_app_your_phone, notify.another_device",
-            },
-        )
+        return self.async_show_form(step_id="init", data_schema=schema)

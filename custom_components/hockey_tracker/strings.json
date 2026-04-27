@@ -37,7 +37,7 @@
     "step": {
       "init": {
         "title": "Hockey Tracker — Notifications",
-        "description": "Enter notify service names as a comma-separated list (e.g. notify.mobile_app_my_phone, notify.persistent_notification). Leave blank to disable a notification type.",
+        "description": "Select which Home Assistant notify services should receive each alert. Enable a type with the toggle, then choose one or more targets from the list.",
         "data": {
           "notify_win_enabled": "Notify when tracked team wins",
           "notify_win_targets": "Win notification targets",

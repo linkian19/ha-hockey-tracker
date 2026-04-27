@@ -781,6 +781,15 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     # Notifications
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _parse_targets(val: Any) -> list[str]:
+        """Parse notification targets from either list (new) or comma-string (legacy) format."""
+        if isinstance(val, list):
+            return [s for s in val if s]
+        if isinstance(val, str):
+            return [s.strip() for s in val.split(",") if s.strip()]
+        return []
+
     async def _maybe_notify(self, data: dict) -> None:
         """Fire HA notify services for win, pre-game, and goal events."""
         opts = self._notif_opts()
@@ -794,7 +803,7 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         # Pre-game notification: fire once per game_id when within 35 min of puck drop
         if opts.get(CONF_NOTIFY_PREGAME_ENABLED) and game_id and game_id != self._notif_pregame_sent_id:
-            targets = [s.strip() for s in opts.get(CONF_NOTIFY_PREGAME_TARGETS, "").split(",") if s.strip()]
+            targets = self._parse_targets(opts.get(CONF_NOTIFY_PREGAME_TARGETS, []))
             if targets and state == GAME_STATE_PRE and data.get("start_time"):
                 try:
                     start = datetime.fromisoformat(data["start_time"].replace("Z", "+00:00"))
@@ -808,7 +817,7 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         # Goal notification: fire for each new tracked-team goal during live play
         if opts.get(CONF_NOTIFY_GOAL_ENABLED) and state == GAME_STATE_LIVE and game_id:
-            targets = [s.strip() for s in opts.get(CONF_NOTIFY_GOAL_TARGETS, "").split(",") if s.strip()]
+            targets = self._parse_targets(opts.get(CONF_NOTIFY_GOAL_TARGETS, []))
             if targets:
                 if game_id != self._notif_goal_game_id:
                     self._notif_goal_game_id = game_id
@@ -837,7 +846,7 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         # Win notification: fire once when FINAL and tracked team won
         if opts.get(CONF_NOTIFY_WIN_ENABLED) and game_id and game_id != self._notif_win_sent_id:
-            targets = [s.strip() for s in opts.get(CONF_NOTIFY_WIN_TARGETS, "").split(",") if s.strip()]
+            targets = self._parse_targets(opts.get(CONF_NOTIFY_WIN_TARGETS, []))
             if targets and state == GAME_STATE_FINAL:
                 if our_score is not None and opp_score is not None and our_score > opp_score:
                     msg = f"Final: {our_team} {our_score}, {opp_team} {opp_score}. {our_team} wins!"
