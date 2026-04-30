@@ -862,11 +862,21 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         await self._send_notifications(targets, f"GOAL! {our_team} scores!", msg)
                     self._notif_goal_count = len(our_goals)
 
-        # Win notification: fire once when FINAL and tracked team won
+        # Win notification: fire once when FINAL and tracked team won.
+        # Require game to have started within 12 hours so a stale FINAL game
+        # doesn't re-trigger after an integration reload (which resets _notif_win_sent_id).
         if opts.get(CONF_NOTIFY_WIN_ENABLED) and game_id and game_id != self._notif_win_sent_id:
             targets = self._parse_targets(opts.get(CONF_NOTIFY_WIN_TARGETS, []))
             if targets and state == GAME_STATE_FINAL:
-                if our_score is not None and opp_score is not None and our_score > opp_score:
+                game_is_recent = False
+                start_time = data.get("start_time")
+                if start_time:
+                    try:
+                        start = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
+                        game_is_recent = (datetime.now(timezone.utc) - start).total_seconds() < 43200
+                    except (ValueError, TypeError):
+                        pass
+                if game_is_recent and our_score is not None and opp_score is not None and our_score > opp_score:
                     msg = f"Final: {our_team} {our_score}, {opp_team} {opp_score}. {our_team} wins!"
                     await self._send_notifications(targets, f"{our_team} Wins!", msg)
                     self._notif_win_sent_id = game_id
