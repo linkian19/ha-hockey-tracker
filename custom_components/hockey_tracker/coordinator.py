@@ -440,36 +440,36 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _ht_extract_events(self, summary: dict) -> list[dict]:
         """Build a chronological event list (goals + penalties) from a game summary."""
         events: list[dict] = []
-        for period in summary.get("periods", []):
-            period_num = int(period.get("info", {}).get("id", 0))
-            for goal in period.get("goals", []):
-                team_id = str(goal.get("team", {}).get("id", ""))
-                scorer = goal.get("scoredBy", {})
-                props = goal.get("properties", {})
+        for period in summary.get("periods") or []:
+            period_num = int((period.get("info") or {}).get("id", 0))
+            for goal in period.get("goals") or []:
+                team_id = str((goal.get("team") or {}).get("id", ""))
+                scorer = goal.get("scoredBy") or {}
+                props = goal.get("properties") or {}
                 events.append({
                     "type": "goal",
                     "period": period_num,
                     "time": goal.get("time", ""),
-                    "team_abbrev": goal.get("team", {}).get("abbreviation", ""),
+                    "team_abbrev": (goal.get("team") or {}).get("abbreviation", ""),
                     "is_tracked_team": team_id == self.team_id,
                     "player_name": f"{scorer.get('firstName','')} {scorer.get('lastName','')}".strip(),
                     "player_number": scorer.get("jerseyNumber"),
                     "assists": [
                         f"{a.get('firstName','')} {a.get('lastName','')}".strip()
-                        for a in goal.get("assists", [])
+                        for a in goal.get("assists") or []
                     ],
                     "is_power_play": props.get("isPowerPlay") == "1",
                     "is_short_handed": props.get("isShortHanded") == "1",
                     "is_empty_net": props.get("isEmptyNet") == "1",
                 })
-            for pen in period.get("penalties", []):
-                team_id = str(pen.get("againstTeam", {}).get("id", ""))
-                player = pen.get("takenBy", {})
+            for pen in period.get("penalties") or []:
+                team_id = str((pen.get("againstTeam") or {}).get("id", ""))
+                player = pen.get("takenBy") or {}
                 events.append({
                     "type": "penalty",
                     "period": period_num,
                     "time": pen.get("time", ""),
-                    "team_abbrev": pen.get("againstTeam", {}).get("abbreviation", ""),
+                    "team_abbrev": (pen.get("againstTeam") or {}).get("abbreviation", ""),
                     "is_tracked_team": team_id == self.team_id,
                     "player_name": f"{player.get('firstName','')} {player.get('lastName','')}".strip(),
                     "player_number": player.get("jerseyNumber"),
