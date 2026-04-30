@@ -75,7 +75,7 @@ After setup, configure alerts at **Settings → Devices & Services → Hockey Tr
 
 Each type has an independent enable toggle and a multi-select list of your configured HA notify services (mobile apps, persistent notification, etc.). Select as many targets as you like per type.
 
-Alerts are deduplicated by game ID — they never fire twice for the same event even if HA restarts mid-game.
+Alerts are deduplicated by game ID within each HA session. Win alerts include a 12-hour recency guard so a stale FINAL game does not re-trigger after an integration reload. If the integration is reloaded during an active game, goal alerts will replay for goals already scored.
 
 ---
 
@@ -188,7 +188,7 @@ Each entry in `recent_games`:
 | `win` | `true` if your team won |
 | `is_home` | `true` if your team was home |
 | `venue` | Arena name |
-| `game_url` | Link to the official game summary (NHL: nhl.com/gamecenter; ECHL/AHL: HockeyTech report) |
+| `game_url` | Link to the game summary page (NHL: nhl.com/gamecenter; AHL: theahl.com game center; ECHL: echl.com game page) |
 
 ---
 
@@ -223,6 +223,16 @@ The 15-second end-of-regulation interval ensures FINAL is detected as quickly as
 
 - The integration uses the HockeyTech API key embedded in the official league apps. Known keys are pre-filled. If a league rotates its key, see the [Configuration](#configuration) section for how to find the updated key.
 - Logo CDN URLs include a version suffix that is team-specific. The integration discovers these from live API responses and caches them — all logos load at full resolution.
+
+---
+
+## Troubleshooting
+
+**Notification settings show raw key names like `notify_win_enabled`**
+Home Assistant loads custom integration translations at startup, not at reload time. After installing or updating via HACS, a full HA restart is required — go to **Settings → System → Restart**. A simple integration reload is not sufficient.
+
+**Win notification fired for an old game after updating**
+Updating via HACS reloads the integration and resets in-memory notification state. The win notification now includes a 12-hour recency guard to prevent this. Upgrade to v1.3.8 or later.
 
 ---
 
