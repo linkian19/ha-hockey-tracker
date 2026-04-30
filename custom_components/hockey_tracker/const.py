@@ -71,9 +71,13 @@ NHL_FINAL_STATES = {"FINAL", "OFF"}
 NHL_PRE_STATES = {"FUT", "PRE"}
 
 # Game summary URLs for each league
-# HockeyTech: official printable game summary (goals, penalties, shots)
+# HockeyTech: official printable game summary — fallback for leagues without a better page
 HOCKEYTECH_GAME_REPORT_URL = (
     "https://lscluster.hockeytech.com/game_reports/official-game-report.php"
     "?client_code={client_code}&game_id={game_id}"
 )
+# AHL game center (user-facing page, uses same numeric game_id as HockeyTech)
+AHL_GAME_URL = "https://www.theahl.com/stats/game-center/{game_id}"
+# ECHL game page uses date + team-name slugs, not the numeric game_id;
+# URL is constructed dynamically in coordinator._ht_game_url()
 NHL_GAME_URL = "https://www.nhl.com/gamecenter/{game_id}"

@@ -14,6 +14,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import (
+    AHL_GAME_URL,
     CONF_API_KEY,
     CONF_LEAGUE,
     CONF_NOTIFY_GOAL_ENABLED,
@@ -32,6 +33,8 @@ from .const import (
     HOCKEYTECH_BASE,
     HOCKEYTECH_GAME_REPORT_URL,
     HOCKEYTECH_LEAGUES,
+    LEAGUE_AHL,
+    LEAGUE_ECHL,
     LEAGUE_NHL,
     NHL_API_BASE,
     NHL_FINAL_STATES,
@@ -153,7 +156,7 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # is detected as soon as the API updates the game status.
             period = data.get("period")
             clock = data.get("clock")
-            if period and period >= 3 and clock == "0:00":
+            if period and int(period) >= 3 and clock == "0:00":
                 return SCAN_INTERVAL_GAME_ENDING
             return SCAN_INTERVAL_LIVE
         if state == GAME_STATE_PRE:
@@ -357,10 +360,25 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "is_home": is_home,
             "venue": game.get("venue_name"),
             "win": team_score > opp_score,
-            "game_url": HOCKEYTECH_GAME_REPORT_URL.format(
-                client_code=self._client_code, game_id=game_id
-            ) if game_id else None,
+            "game_url": self._ht_game_url(game, game_id),
         }
+
+    def _ht_game_url(self, game: dict, game_id: str | None) -> str | None:
+        if not game_id:
+            return None
+        if self.league == LEAGUE_AHL:
+            return AHL_GAME_URL.format(game_id=game_id)
+        if self.league == LEAGUE_ECHL:
+            date_str = (game.get("GameDateISO8601") or "")[:10]
+            if date_str and date_str.count("-") == 2:
+                year, month, day = date_str.split("-")
+                home = f"{game.get('HomeCity', '')} {game.get('HomeNickname', '')}".strip()
+                away = f"{game.get('VisitorCity', '')} {game.get('VisitorNickname', '')}".strip()
+                home_slug = re.sub(r"[^a-z0-9]+", "-", home.lower()).strip("-")
+                away_slug = re.sub(r"[^a-z0-9]+", "-", away.lower()).strip("-")
+                if home_slug and away_slug:
+                    return f"https://echl.com/games/{year}/{month}/{day}/{home_slug}-vs-{away_slug}"
+        return HOCKEYTECH_GAME_REPORT_URL.format(client_code=self._client_code, game_id=game_id)
 
     @staticmethod
     def _ht_parse_dt(game: dict) -> datetime:
@@ -528,9 +546,9 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         live = next((g for g in team_games if g.get("gameState") in NHL_LIVE_STATES), None)
         if live:
             return live
-        final = next((g for g in team_games if g.get("gameState") in NHL_FINAL_STATES), None)
-        if final:
-            return final
+        finals = [g for g in team_games if g.get("gameState") in NHL_FINAL_STATES]
+        if finals:
+            return max(finals, key=lambda g: g.get("startTimeUTC") or g.get("gameDate") or "")
         return next((g for g in team_games if g.get("gameState") in NHL_PRE_STATES), None)
 
     async def _get_nhl_schedule_cached(self) -> list[dict]:
