@@ -198,7 +198,7 @@ The integration automatically adjusts how often it polls based on game state:
 
 | Situation | Interval |
 |-----------|----------|
-| Game in progress, clock at 0:00 in period ≥ 3 | 15 seconds |
+| Game in progress, end of regulation (P3 at 0:00) or any OT period | 15 seconds |
 | Game in progress (LIVE) | 30 seconds |
 | Game today, not yet started (PRE) | 5 minutes |
 | Game just ended (FINAL) | 15 minutes |
@@ -206,7 +206,7 @@ The integration automatically adjusts how often it polls based on game state:
 | Next game within 24 hours | 30 minutes |
 | Next game tomorrow or later | 2 hours |
 
-The 15-second end-of-regulation interval ensures FINAL is detected as quickly as possible after the API updates.
+The 15-second interval at end of regulation and throughout OT ensures FINAL is detected as quickly as possible after the API updates. OT is sudden-death — the game can end at any clock time — so the fast poll covers the entire OT period rather than waiting for the clock to hit 0:00.
 
 ---
 

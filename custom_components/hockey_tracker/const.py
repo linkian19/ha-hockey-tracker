@@ -42,7 +42,7 @@ CONF_NOTIFY_GOAL_TARGETS = "notify_goal_targets"
 
 # Polling intervals (seconds)
 SCAN_INTERVAL_LIVE = 30
-SCAN_INTERVAL_GAME_ENDING = 15  # extra-fast poll when clock hits 0:00 in period ≥ 3
+SCAN_INTERVAL_GAME_ENDING = 15  # extra-fast poll at end of regulation or any OT period
 SCAN_INTERVAL_PRE = 300
 SCAN_INTERVAL_FINAL = 900
 SCAN_INTERVAL_GAME_SOON = 900

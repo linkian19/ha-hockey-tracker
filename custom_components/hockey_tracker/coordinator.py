@@ -152,12 +152,15 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _next_interval(self, data: dict) -> int:
         state = data.get("game_state")
         if state == GAME_STATE_LIVE:
-            # Poll extra-fast when clock hits 0:00 in period ≥ 3 so FINAL
-            # is detected as soon as the API updates the game status.
+            # Poll extra-fast at end of regulation (P3 clock 0:00) and throughout
+            # OT (period ≥ 4) — OT is sudden-death so the game can end at any
+            # clock time, never reaching 0:00.
             period = data.get("period")
             clock = data.get("clock")
-            if period and int(period) >= 3 and clock == "0:00":
-                return SCAN_INTERVAL_GAME_ENDING
+            if period:
+                p = int(period)
+                if p >= 4 or (p == 3 and clock == "0:00"):
+                    return SCAN_INTERVAL_GAME_ENDING
             return SCAN_INTERVAL_LIVE
         if state == GAME_STATE_PRE:
             return SCAN_INTERVAL_PRE
