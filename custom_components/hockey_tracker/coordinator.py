@@ -236,7 +236,7 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         for g in team_games:
             status = str(g.get("GameStatus", ""))
             if status not in ("1", "4"):
-                if live is None:
+                if live is None and self._ht_parse_dt(g) >= cutoff:
                     live = g
             elif status == "4" and recent_final is None:
                 if self._ht_parse_dt(g) >= cutoff:

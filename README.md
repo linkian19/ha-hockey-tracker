@@ -75,7 +75,7 @@ After setup, configure alerts at **Settings → Devices & Services → Hockey Tr
 
 Each type has an independent enable toggle and a multi-select list of your configured HA notify services (mobile apps, persistent notification, etc.). Select as many targets as you like per type.
 
-Alerts are deduplicated by game ID within each HA session. Win alerts include a 12-hour recency guard so a stale FINAL game does not re-trigger after an integration reload. If the integration is reloaded during an active game, goal alerts will replay for goals already scored.
+Alerts are deduplicated by game ID within each HA session. Win alerts include a 12-hour recency guard so a stale FINAL game does not re-trigger after an integration reload. ECHL/AHL LIVE games use a 4-hour recency guard so a completed game that the API briefly re-reports as active does not re-trigger goal or win alerts. If the integration is reloaded during an active game, goal alerts will replay for goals already scored.
 
 ---
 
@@ -233,6 +233,9 @@ Home Assistant loads custom integration translations at startup, not at reload t
 
 **Win notification fired for an old game after updating**
 Updating via HACS reloads the integration and resets in-memory notification state. The win notification now includes a 12-hour recency guard to prevent this. Upgrade to v1.3.8 or later.
+
+**Goal/Live notifications fired for a game that already ended (ECHL/AHL)**
+The HockeyTech API occasionally returns a completed game with a non-final status code hours after it ended, causing the integration to briefly re-enter LIVE state. As of v1.3.10, LIVE game detection uses the same 4-hour recency cutoff already applied to FINAL games, so stale API data for completed games is ignored.
 
 ---
 
