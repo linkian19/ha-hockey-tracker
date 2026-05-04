@@ -36,11 +36,13 @@ from .const import (
     LEAGUE_AHL,
     LEAGUE_ECHL,
     LEAGUE_NHL,
+    LEAGUE_PWHL,
     NHL_API_BASE,
     NHL_FINAL_STATES,
     NHL_GAME_URL,
     NHL_LIVE_STATES,
     NHL_PRE_STATES,
+    PWHL_GAME_URL,
     RECENT_GAMES_MAX,
     SCAN_INTERVAL_FINAL,
     SCAN_INTERVAL_GAME_ENDING,
@@ -62,7 +64,7 @@ def _event_sort_key(e: dict) -> tuple:
 
 
 class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
-    """Polls game data with adaptive update intervals. Supports ECHL, AHL, and NHL."""
+    """Polls game data with adaptive update intervals. Supports all HockeyTech leagues and NHL."""
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         self._entry = entry
@@ -371,6 +373,8 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return None
         if self.league == LEAGUE_AHL:
             return AHL_GAME_URL.format(game_id=game_id)
+        if self.league == LEAGUE_PWHL:
+            return PWHL_GAME_URL.format(game_id=game_id)
         if self.league == LEAGUE_ECHL:
             date_str = (game.get("GameDateISO8601") or "")[:10]
             if date_str and date_str.count("-") == 2:

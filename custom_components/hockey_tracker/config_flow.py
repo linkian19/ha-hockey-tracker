@@ -31,14 +31,42 @@ from .const import (
     HOCKEYTECH_BASE,
     HOCKEYTECH_LEAGUES,
     LEAGUE_AHL,
+    LEAGUE_AJHL,
+    LEAGUE_BCHL,
+    LEAGUE_CHL,
     LEAGUE_ECHL,
+    LEAGUE_MHL,
+    LEAGUE_MJHL,
     LEAGUE_NHL,
+    LEAGUE_OHL,
+    LEAGUE_OJHL,
+    LEAGUE_PWHL,
+    LEAGUE_QMJHL,
+    LEAGUE_SJHL,
+    LEAGUE_USHL,
+    LEAGUE_WHL,
     NHL_API_BASE,
 )
 
 _LOGGER = logging.getLogger(__name__)
 
-LEAGUE_OPTIONS = [LEAGUE_ECHL, LEAGUE_AHL, LEAGUE_NHL]
+LEAGUE_OPTIONS = [
+    LEAGUE_NHL,
+    LEAGUE_PWHL,
+    LEAGUE_AHL,
+    LEAGUE_ECHL,
+    LEAGUE_CHL,
+    LEAGUE_OHL,
+    LEAGUE_WHL,
+    LEAGUE_QMJHL,
+    LEAGUE_USHL,
+    LEAGUE_BCHL,
+    LEAGUE_OJHL,
+    LEAGUE_AJHL,
+    LEAGUE_SJHL,
+    LEAGUE_MJHL,
+    LEAGUE_MHL,
+]
 
 
 async def _fetch_ht_teams(api_key: str, client_code: str) -> list[dict]:

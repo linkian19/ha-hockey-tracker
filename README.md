@@ -1,9 +1,15 @@
 # Hockey Tracker
 
-A [Home Assistant](https://www.home-assistant.io/) custom integration that tracks live scores, game state, and upcoming schedule for any **ECHL**, **AHL**, or **NHL** team.
+A [Home Assistant](https://www.home-assistant.io/) custom integration that tracks live scores, game state, and upcoming schedule for teams across **15 hockey leagues** — from the NHL down through professional women's, minor professional, major junior, and junior leagues.
 
-- **ECHL / AHL** — data from the HockeyTech / LeagueStat API (same backend as the official league apps)
+| Tier | Leagues |
+|------|---------|
+| Professional | NHL, PWHL, AHL, ECHL |
+| Major Junior (CHL) | CHL, OHL, WHL, QMJHL |
+| Junior / Developmental | USHL, BCHL, OJHL, AJHL, SJHL, MJHL, MHL |
+
 - **NHL** — data from the public NHL Stats API (`api-web.nhle.com`), no API key required
+- **All other leagues** — data from the HockeyTech / LeagueStat API (same backend as the official league apps)
 
 > **Companion card:** Install [ha-hockey-tracker-card](https://github.com/linkian19/ha-hockey-tracker-card) to display this data on your Lovelace dashboard.
 
@@ -12,10 +18,10 @@ A [Home Assistant](https://www.home-assistant.io/) custom integration that track
 ## Features
 
 - Live in-game scores, period, and clock display
-- Shots on goal (home and away) — all three leagues during live games
+- Shots on goal (home and away) — all leagues during live games
 - Game state sensor: `PRE`, `LIVE`, `FINAL`, `NO_GAME`
 - Full-resolution team logos via CDN for all leagues
-- Live game events feed: goals (scorer, assists, PP/SH/EN) and penalties — all three leagues
+- Live game events feed: goals (scorer, assists, PP/SH/EN) and penalties — all leagues
 - Next upcoming game details (opponent, date/time, venue, logos)
 - Recent game results (up to 10) with links to official game summaries
 - Adaptive polling — 15 s at end of regulation, 30 s during live games, up to 2 h when no game is near
@@ -47,15 +53,15 @@ A [Home Assistant](https://www.home-assistant.io/) custom integration that track
 
 1. Go to **Settings → Devices & Services → Add Integration**
 2. Search for **Hockey Tracker**
-3. Select your league: **ECHL**, **AHL**, or **NHL**
-4. For ECHL/AHL: enter the API key (pre-filled with the known key)
+3. Select your league from the dropdown
+4. For all leagues except NHL: enter the API key (pre-filled with the known public key)
 5. Select your team from the dropdown
 
 ### API Keys
 
 **NHL** — no API key required. The NHL Stats API is public.
 
-**ECHL / AHL** — the integration uses the HockeyTech API key embedded in the official league apps. Known keys are pre-filled in the setup form. If a league rotates its key and the integration stops working, you can find the updated key by:
+**All HockeyTech leagues** — the integration uses the public API key embedded in each league's official app. Known keys are pre-filled in the setup form. If a league rotates its key and the integration stops working, you can find the updated key by:
 
 1. Opening the league website in Chrome and pressing **F12 → Network**
 2. Filtering requests by `lscluster.hockeytech.com`
@@ -75,7 +81,7 @@ After setup, configure alerts at **Settings → Devices & Services → Hockey Tr
 
 Each type has an independent enable toggle and a multi-select list of your configured HA notify services (mobile apps, persistent notification, etc.). Select as many targets as you like per type.
 
-Alerts are deduplicated by game ID within each HA session. Win alerts include a 12-hour recency guard so a stale FINAL game does not re-trigger after an integration reload. ECHL/AHL LIVE games use a 4-hour recency guard so a completed game that the API briefly re-reports as active does not re-trigger goal or win alerts. If the integration is reloaded during an active game, goal alerts will replay for goals already scored.
+Alerts are deduplicated by game ID within each HA session. Win alerts include a 12-hour recency guard so a stale FINAL game does not re-trigger after an integration reload. HockeyTech LIVE games use a 4-hour recency guard so a completed game that the API briefly re-reports as active does not re-trigger goal or win alerts. If the integration is reloaded during an active game, goal alerts will replay for goals already scored.
 
 ---
 
@@ -168,7 +174,7 @@ Each entry in `game_events`:
 | `description` | (Penalties only) Infraction description |
 | `minutes` | (Penalties only) Penalty duration in minutes |
 
-> Events are populated during live and final games via a second API call. ECHL/AHL uses the HockeyTech `gameSummary` endpoint; NHL uses `gamecenter/{id}/landing`. Pre-game and no-game states return an empty list.
+> Events are populated during live and final games via a second API call. HockeyTech leagues use the `gameSummary` endpoint; NHL uses `gamecenter/{id}/landing`. Pre-game and no-game states return an empty list.
 
 #### Recent games
 
@@ -188,7 +194,7 @@ Each entry in `recent_games`:
 | `win` | `true` if your team won |
 | `is_home` | `true` if your team was home |
 | `venue` | Arena name |
-| `game_url` | Link to the game summary page (NHL: nhl.com/gamecenter; AHL: theahl.com game center; ECHL: echl.com game page) |
+| `game_url` | Link to the game summary page (NHL: nhl.com/gamecenter; AHL: theahl.com game center; PWHL: thepwhl.com; ECHL: echl.com game page; all others: HockeyTech official game report) |
 
 ---
 
@@ -219,10 +225,12 @@ The 15-second interval at end of regulation and throughout OT ensures FINAL is d
 - During live and final games, a second call to `gamecenter/{id}/landing` provides shots on goal and the play-by-play events feed.
 - During the off-season or after a team is eliminated from the playoffs, the sensor state is `NO_GAME` with no `next_game` attributes.
 
-### ECHL / AHL
+### HockeyTech leagues (PWHL, AHL, ECHL, CHL, OHL, WHL, QMJHL, USHL, BCHL, OJHL, AJHL, SJHL, MJHL, MHL)
 
-- The integration uses the HockeyTech API key embedded in the official league apps. Known keys are pre-filled. If a league rotates its key, see the [Configuration](#configuration) section for how to find the updated key.
+- All these leagues share the same HockeyTech / LeagueStat API at `lscluster.hockeytech.com`. Each league uses its own `client_code` and API key.
+- The integration uses the public API key embedded in each league's official app. Known keys are pre-filled in the setup form. If a league rotates its key, see the [Configuration](#configuration) section for how to find the updated key.
 - Logo CDN URLs include a version suffix that is team-specific. The integration discovers these from live API responses and caches them — all logos load at full resolution.
+- CHL, OHL, WHL, and QMJHL share the same public API key (`f1aa699db3d81487`).
 
 ---
 
@@ -232,10 +240,16 @@ The 15-second interval at end of regulation and throughout OT ensures FINAL is d
 Home Assistant loads custom integration translations at startup, not at reload time. After installing or updating via HACS, a full HA restart is required — go to **Settings → System → Restart**. A simple integration reload is not sufficient.
 
 **Win notification fired for an old game after updating**
-Updating via HACS reloads the integration and resets in-memory notification state. The win notification now includes a 12-hour recency guard to prevent this. Upgrade to v1.3.8 or later.
+Updating via HACS reloads the integration and resets in-memory notification state. The win notification includes a 12-hour recency guard to prevent this. Upgrade to v1.3.8 or later.
 
-**Goal/Live notifications fired for a game that already ended (ECHL/AHL)**
-The HockeyTech API occasionally returns a completed game with a non-final status code hours after it ended, causing the integration to briefly re-enter LIVE state. As of v1.3.10, LIVE game detection uses the same 4-hour recency cutoff already applied to FINAL games, so stale API data for completed games is ignored.
+**Goal/Live notifications fired for a game that already ended**
+The HockeyTech API occasionally returns a completed game with a non-final status code hours after it ended, causing the integration to briefly re-enter LIVE state. LIVE game detection uses a 4-hour recency cutoff so stale API data for completed games is ignored.
+
+---
+
+## Attribution
+
+This integration was inspired by [ha-teamtracker](https://github.com/vasqued2/ha-teamtracker) by [vasqued2](https://github.com/vasqued2), which provided the model for multi-league HockeyTech support. The public API keys for PWHL, CHL, OHL, WHL, QMJHL, USHL, OJHL, BCHL, SJHL, AJHL, MJHL, and MHL were sourced from the ha-teamtracker project.
 
 ---
 
