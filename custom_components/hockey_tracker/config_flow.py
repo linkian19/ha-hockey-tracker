@@ -163,7 +163,13 @@ class HockeyTrackerConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="user",
             data_schema=vol.Schema(
-                {vol.Required(CONF_ENTRY_TYPE): vol.In([ENTRY_TYPE_TEAM, ENTRY_TYPE_PLAYOFF])}
+                {vol.Required(CONF_ENTRY_TYPE): SelectSelector(SelectSelectorConfig(
+                    options=[
+                        {"value": ENTRY_TYPE_TEAM, "label": "Team Tracker"},
+                        {"value": ENTRY_TYPE_PLAYOFF, "label": "Playoff Tracker"},
+                    ],
+                    mode=SelectSelectorMode.DROPDOWN,
+                ))}
             ),
         )
 
