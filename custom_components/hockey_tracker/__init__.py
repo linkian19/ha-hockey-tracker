@@ -1,4 +1,4 @@
-"""Hockey Tracker — Home Assistant integration for ECHL, AHL, and NHL scores and schedules."""
+"""Hockey Tracker — Home Assistant integration for hockey scores, schedules, and playoff brackets."""
 from __future__ import annotations
 
 import voluptuous as vol
@@ -9,8 +9,9 @@ from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_registry as er
 
-from .const import DOMAIN
+from .const import CONF_ENTRY_TYPE, DOMAIN, ENTRY_TYPE_PLAYOFF
 from .coordinator import HockeyCoordinator
+from .playoff_coordinator import PlayoffCoordinator
 
 PLATFORMS: list[Platform] = [Platform.SENSOR]
 
@@ -21,9 +22,14 @@ _SERVICE_SCHEMA = vol.Schema(
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    coordinator = HockeyCoordinator(hass, entry)
-    await coordinator.async_config_entry_first_refresh()
+    entry_type = entry.data.get(CONF_ENTRY_TYPE, "team")
 
+    if entry_type == ENTRY_TYPE_PLAYOFF:
+        coordinator: HockeyCoordinator | PlayoffCoordinator = PlayoffCoordinator(hass, entry)
+    else:
+        coordinator = HockeyCoordinator(hass, entry)
+
+    await coordinator.async_config_entry_first_refresh()
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
@@ -33,9 +39,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             for entity_id in call.data["entity_id"]:
                 entry_obj = entity_reg.async_get(entity_id)
                 if entry_obj and entry_obj.config_entry_id:
-                    coord: HockeyCoordinator | None = hass.data.get(DOMAIN, {}).get(
-                        entry_obj.config_entry_id
-                    )
+                    coord = hass.data.get(DOMAIN, {}).get(entry_obj.config_entry_id)
                     if coord:
                         coord.clear_schedule_cache()
                         await coord.async_refresh()

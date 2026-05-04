@@ -18,6 +18,9 @@ from homeassistant.helpers.selector import (
 
 from .const import (
     CONF_API_KEY,
+    CONF_ENTRY_TYPE,
+    CONF_FOLLOWED_TEAM_NAMES,
+    CONF_FOLLOWED_TEAMS,
     CONF_LEAGUE,
     CONF_NOTIFY_GOAL_ENABLED,
     CONF_NOTIFY_GOAL_TARGETS,
@@ -28,6 +31,8 @@ from .const import (
     CONF_TEAM_ID,
     CONF_TEAM_NAME,
     DOMAIN,
+    ENTRY_TYPE_PLAYOFF,
+    ENTRY_TYPE_TEAM,
     HOCKEYTECH_BASE,
     HOCKEYTECH_LEAGUES,
     LEAGUE_AHL,
@@ -49,6 +54,8 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+MAX_FOLLOWED_TEAMS = 4
 
 LEAGUE_OPTIONS = [
     LEAGUE_NHL,
@@ -135,6 +142,7 @@ class HockeyTrackerConfigFlow(ConfigFlow, domain=DOMAIN):
     VERSION = 1
 
     def __init__(self) -> None:
+        self._entry_type: str = ENTRY_TYPE_TEAM
         self._league: str = ""
         self._api_key: str = ""
         self._teams: list[dict] = []
@@ -147,6 +155,22 @@ class HockeyTrackerConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
+        """First step: choose between Team Tracker and Playoff Tracker."""
+        if user_input is not None:
+            self._entry_type = user_input[CONF_ENTRY_TYPE]
+            return await self.async_step_league()
+
+        return self.async_show_form(
+            step_id="user",
+            data_schema=vol.Schema(
+                {vol.Required(CONF_ENTRY_TYPE): vol.In([ENTRY_TYPE_TEAM, ENTRY_TYPE_PLAYOFF])}
+            ),
+        )
+
+    async def async_step_league(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """League selection (shared by team and playoff flows)."""
         errors: dict[str, str] = {}
 
         if user_input is not None:
@@ -157,6 +181,8 @@ class HockeyTrackerConfigFlow(ConfigFlow, domain=DOMAIN):
                     if not self._teams:
                         errors["base"] = "no_teams"
                     else:
+                        if self._entry_type == ENTRY_TYPE_PLAYOFF:
+                            return await self.async_step_followed_teams()
                         return await self.async_step_team()
                 except aiohttp.ClientError:
                     errors["base"] = "cannot_connect"
@@ -167,7 +193,7 @@ class HockeyTrackerConfigFlow(ConfigFlow, domain=DOMAIN):
                 return await self.async_step_api_key()
 
         return self.async_show_form(
-            step_id="user",
+            step_id="league",
             data_schema=vol.Schema(
                 {vol.Required(CONF_LEAGUE): vol.In(LEAGUE_OPTIONS)}
             ),
@@ -187,6 +213,8 @@ class HockeyTrackerConfigFlow(ConfigFlow, domain=DOMAIN):
                 if not self._teams:
                     errors["base"] = "no_teams"
                 else:
+                    if self._entry_type == ENTRY_TYPE_PLAYOFF:
+                        return await self.async_step_followed_teams()
                     return await self.async_step_team()
             except aiohttp.ClientResponseError as err:
                 _LOGGER.error("API key validation failed: %s", err)
@@ -212,6 +240,7 @@ class HockeyTrackerConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_team(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
+        """Single-team selection for the Team Tracker flow."""
         errors: dict[str, str] = {}
 
         team_options = {
@@ -229,6 +258,7 @@ class HockeyTrackerConfigFlow(ConfigFlow, domain=DOMAIN):
             self._abort_if_unique_id_configured()
 
             entry_data: dict[str, Any] = {
+                CONF_ENTRY_TYPE: ENTRY_TYPE_TEAM,
                 CONF_LEAGUE: self._league,
                 CONF_TEAM_ID: team_id,
                 CONF_TEAM_NAME: team_name,
@@ -243,6 +273,58 @@ class HockeyTrackerConfigFlow(ConfigFlow, domain=DOMAIN):
             step_id="team",
             data_schema=vol.Schema({vol.Required(CONF_TEAM_ID): vol.In(team_options)}),
             errors=errors,
+        )
+
+    async def async_step_followed_teams(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Multi-select up to 4 teams for the Playoff Tracker flow."""
+        errors: dict[str, str] = {}
+
+        team_options = [
+            {"value": str(t.get("id")), "label": f"{t.get('city', '')} {t.get('nickname', '')}".strip()}
+            for t in self._teams
+            if t.get("id")
+        ]
+        team_label_map = {opt["value"]: opt["label"] for opt in team_options}
+
+        if user_input is not None:
+            selected: list[str] = user_input.get(CONF_FOLLOWED_TEAMS, [])
+            if not selected:
+                errors["base"] = "no_teams_selected"
+            elif len(selected) > MAX_FOLLOWED_TEAMS:
+                errors["base"] = "too_many_teams"
+            else:
+                team_names = [team_label_map.get(tid, tid) for tid in selected]
+
+                await self.async_set_unique_id(f"hockey_playoff_{self._league}_{'_'.join(sorted(selected))}")
+                self._abort_if_unique_id_configured()
+
+                entry_data: dict[str, Any] = {
+                    CONF_ENTRY_TYPE: ENTRY_TYPE_PLAYOFF,
+                    CONF_LEAGUE: self._league,
+                    CONF_FOLLOWED_TEAMS: selected,
+                    CONF_FOLLOWED_TEAM_NAMES: team_names,
+                }
+                if self._league != LEAGUE_NHL:
+                    entry_data[CONF_API_KEY] = self._api_key
+
+                title = f"{self._league} Playoffs ({', '.join(team_names[:2])}" + (f" +{len(team_names)-2}" if len(team_names) > 2 else "") + ")"
+                return self.async_create_entry(title=title, data=entry_data)
+
+        return self.async_show_form(
+            step_id="followed_teams",
+            data_schema=vol.Schema({
+                vol.Required(CONF_FOLLOWED_TEAMS): SelectSelector(
+                    SelectSelectorConfig(
+                        options=team_options,
+                        multiple=True,
+                        mode=SelectSelectorMode.DROPDOWN,
+                    )
+                ),
+            }),
+            errors=errors,
+            description_placeholders={"max_teams": str(MAX_FOLLOWED_TEAMS)},
         )
 
 
@@ -260,15 +342,12 @@ class HockeyTrackerOptionsFlow(OptionsFlow):
 
         opts = self._entry.options
 
-        # Build options list from all registered notify services so the user
-        # can pick from a multi-select rather than typing service names manually.
         notify_options = sorted(
             f"notify.{name}"
             for name in self.hass.services.async_services().get("notify", {})
         )
 
         def _targets_default(key: str) -> list[str]:
-            """Return current targets as a list, migrating legacy comma-string if needed."""
             val = opts.get(key, [])
             if isinstance(val, str):
                 return [s.strip() for s in val.split(",") if s.strip()]
@@ -280,30 +359,12 @@ class HockeyTrackerOptionsFlow(OptionsFlow):
             ))
 
         schema = vol.Schema({
-            vol.Optional(
-                CONF_NOTIFY_WIN_ENABLED,
-                default=opts.get(CONF_NOTIFY_WIN_ENABLED, False),
-            ): BooleanSelector(),
-            vol.Optional(
-                CONF_NOTIFY_WIN_TARGETS,
-                default=_targets_default(CONF_NOTIFY_WIN_TARGETS),
-            ): _target_sel(),
-            vol.Optional(
-                CONF_NOTIFY_PREGAME_ENABLED,
-                default=opts.get(CONF_NOTIFY_PREGAME_ENABLED, False),
-            ): BooleanSelector(),
-            vol.Optional(
-                CONF_NOTIFY_PREGAME_TARGETS,
-                default=_targets_default(CONF_NOTIFY_PREGAME_TARGETS),
-            ): _target_sel(),
-            vol.Optional(
-                CONF_NOTIFY_GOAL_ENABLED,
-                default=opts.get(CONF_NOTIFY_GOAL_ENABLED, False),
-            ): BooleanSelector(),
-            vol.Optional(
-                CONF_NOTIFY_GOAL_TARGETS,
-                default=_targets_default(CONF_NOTIFY_GOAL_TARGETS),
-            ): _target_sel(),
+            vol.Optional(CONF_NOTIFY_WIN_ENABLED, default=opts.get(CONF_NOTIFY_WIN_ENABLED, False)): BooleanSelector(),
+            vol.Optional(CONF_NOTIFY_WIN_TARGETS, default=_targets_default(CONF_NOTIFY_WIN_TARGETS)): _target_sel(),
+            vol.Optional(CONF_NOTIFY_PREGAME_ENABLED, default=opts.get(CONF_NOTIFY_PREGAME_ENABLED, False)): BooleanSelector(),
+            vol.Optional(CONF_NOTIFY_PREGAME_TARGETS, default=_targets_default(CONF_NOTIFY_PREGAME_TARGETS)): _target_sel(),
+            vol.Optional(CONF_NOTIFY_GOAL_ENABLED, default=opts.get(CONF_NOTIFY_GOAL_ENABLED, False)): BooleanSelector(),
+            vol.Optional(CONF_NOTIFY_GOAL_TARGETS, default=_targets_default(CONF_NOTIFY_GOAL_TARGETS)): _target_sel(),
         })
 
         return self.async_show_form(step_id="init", data_schema=schema)

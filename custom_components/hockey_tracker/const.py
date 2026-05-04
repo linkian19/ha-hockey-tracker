@@ -111,6 +111,18 @@ CONF_API_KEY = "api_key"
 CONF_TEAM_ID = "team_id"
 CONF_TEAM_NAME = "team_name"
 CONF_LEAGUE = "league"
+CONF_ENTRY_TYPE = "entry_type"
+CONF_FOLLOWED_TEAMS = "followed_teams"
+CONF_FOLLOWED_TEAM_NAMES = "followed_team_names"
+
+ENTRY_TYPE_TEAM = "team"
+ENTRY_TYPE_PLAYOFF = "playoff"
+
+# Days two series can be apart in start date and still be considered the same playoff round
+ROUND_DATE_WINDOW = 5
+
+# NHL playoff bracket URL — {year} is the season year (e.g. 2026)
+NHL_PLAYOFF_BRACKET_URL = "{base}/playoff-bracket/{year}"
 
 # Notification option config keys
 CONF_NOTIFY_WIN_ENABLED = "notify_win_enabled"

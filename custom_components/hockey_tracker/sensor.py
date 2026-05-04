@@ -7,8 +7,9 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import ATTRIBUTION, CONF_TEAM_NAME, DOMAIN
+from .const import ATTRIBUTION, CONF_ENTRY_TYPE, CONF_TEAM_NAME, DOMAIN, ENTRY_TYPE_PLAYOFF
 from .coordinator import HockeyCoordinator
+from .playoff_sensor import PlayoffSensor
 
 _GAME_ATTRS = (
     "game_id", "start_time", "period", "clock",
@@ -23,8 +24,11 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    coordinator: HockeyCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([HockeyGameSensor(coordinator, entry)])
+    coordinator = hass.data[DOMAIN][entry.entry_id]
+    if entry.data.get(CONF_ENTRY_TYPE) == ENTRY_TYPE_PLAYOFF:
+        async_add_entities([PlayoffSensor(coordinator, entry)])
+    else:
+        async_add_entities([HockeyGameSensor(coordinator, entry)])
 
 
 class HockeyGameSensor(CoordinatorEntity[HockeyCoordinator], SensorEntity):

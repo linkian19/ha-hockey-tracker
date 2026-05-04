@@ -2,6 +2,16 @@
   "config": {
     "step": {
       "user": {
+        "title": "Hockey Tracker — Setup",
+        "description": "Choose what you want to track.",
+        "data": {
+          "entry_type": "Tracker Type"
+        },
+        "data_description": {
+          "entry_type": "Team Tracker follows a single team. Playoff Tracker follows a league's full playoff bracket with up to 4 teams."
+        }
+      },
+      "league": {
         "title": "Hockey Tracker — Select League",
         "description": "Choose the league you want to track.",
         "data": {
@@ -21,16 +31,26 @@
         "data": {
           "team_id": "Team"
         }
+      },
+      "followed_teams": {
+        "title": "Playoff Tracker — Followed Teams",
+        "description": "Select up to {max_teams} teams to follow in the playoffs. You will receive notifications and see live game data for these teams.",
+        "data": {
+          "followed_teams": "Teams to Follow"
+        }
       }
     },
     "error": {
       "invalid_auth": "Invalid API key.",
       "cannot_connect": "Unable to reach the API. Check your network.",
       "no_teams": "Connected successfully but no teams were returned.",
+      "no_teams_selected": "Select at least one team.",
+      "too_many_teams": "You can follow a maximum of 4 teams.",
       "unknown": "Unexpected error. Check logs."
     },
     "abort": {
-      "already_configured": "This team is already configured."
+      "already_configured": "This team is already configured.",
+      "already_configured_playoff": "A playoff tracker for this league and team combination is already configured."
     }
   },
   "options": {

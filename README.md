@@ -17,6 +17,7 @@ A [Home Assistant](https://www.home-assistant.io/) custom integration that track
 
 ## Features
 
+### Team Tracker
 - Live in-game scores, period, and clock display
 - Shots on goal (home and away) — all leagues during live games
 - Game state sensor: `PRE`, `LIVE`, `FINAL`, `NO_GAME`
@@ -29,6 +30,14 @@ A [Home Assistant](https://www.home-assistant.io/) custom integration that track
 - `last_fetched` attribute — always know how fresh the data is
 - Built-in notifications — win, pre-game, and goal alerts via any HA notify service
 - `hockey_tracker.force_refresh` service — clears cache and hard-pulls fresh data on demand
+
+### Playoff Tracker
+- Full playoff bracket for any supported league — all rounds, all series
+- Follow up to 4 teams — their series are highlighted in the bracket view
+- Live game data for any followed team during playoff games (scores, period, clock, shots, events)
+- Bracket data automatically clustered into rounds (NHL uses explicit round data; other leagues group series by start-date proximity)
+- Per-team notifications — win, pre-game, and goal alerts for any followed team
+- Adaptive polling identical to the Team Tracker — fast during live games, slow when idle
 
 ---
 
@@ -51,11 +60,29 @@ A [Home Assistant](https://www.home-assistant.io/) custom integration that track
 
 ## Configuration
 
+When you add the Hockey Tracker integration, you first choose a tracker type:
+
+### Team Tracker
+
+Follows a single team throughout the season.
+
 1. Go to **Settings → Devices & Services → Add Integration**
-2. Search for **Hockey Tracker**
+2. Search for **Hockey Tracker** and choose **Team Tracker**
 3. Select your league from the dropdown
 4. For all leagues except NHL: enter the API key (pre-filled with the known public key)
 5. Select your team from the dropdown
+
+### Playoff Tracker
+
+Follows a league's full playoff bracket with live data for up to 4 followed teams.
+
+1. Go to **Settings → Devices & Services → Add Integration**
+2. Search for **Hockey Tracker** and choose **Playoff Tracker**
+3. Select the league whose playoffs you want to follow
+4. For all leagues except NHL: enter the API key (pre-filled)
+5. Select up to 4 teams to follow — these teams are highlighted in the bracket and trigger notifications
+
+One sensor is created per Playoff Tracker entry, regardless of how many teams you follow. The bracket attribute contains all rounds and series for the entire league.
 
 ### API Keys
 
@@ -83,6 +110,8 @@ Each type has an independent enable toggle and a multi-select list of your confi
 
 Alerts are deduplicated by game ID within each HA session. Win alerts include a 12-hour recency guard so a stale FINAL game does not re-trigger after an integration reload. HockeyTech LIVE games use a 4-hour recency guard so a completed game that the API briefly re-reports as active does not re-trigger goal or win alerts. If the integration is reloaded during an active game, goal alerts will replay for goals already scored.
 
+**Playoff Tracker** — notifications apply per followed team. If two followed teams are playing simultaneously, the coordinator picks the most relevant single game (LIVE priority over FINAL over PRE) to drive notification state. The same win/pre-game/goal logic applies; alerts are keyed per team ID so each followed team's goals and wins fire independently.
+
 ---
 
 ## Services
@@ -101,7 +130,9 @@ The companion card's refresh button calls this service automatically.
 
 ---
 
-## Sensor
+## Sensors
+
+### Team Tracker Sensor
 
 Each configured team creates one sensor entity. The state reflects the current game status:
 
@@ -195,6 +226,66 @@ Each entry in `recent_games`:
 | `is_home` | `true` if your team was home |
 | `venue` | Arena name |
 | `game_url` | Link to the game summary page (NHL: nhl.com/gamecenter; AHL: theahl.com game center; PWHL: thepwhl.com; ECHL: echl.com game page; all others: HockeyTech official game report) |
+
+---
+
+### Playoff Tracker Sensor
+
+One sensor is created for the entire playoff bracket. The entity name is derived from the league and followed teams, e.g. `NHL Playoffs (COL, EDM +1)`.
+
+The sensor state reflects the most relevant active game for any followed team (LIVE > FINAL > PRE > NO_GAME). When no followed team is playing, the state is `NO_GAME`.
+
+| State | Meaning |
+|-------|---------|
+| `PRE` | A followed team's game starts within 35 minutes |
+| `LIVE` | A followed team's game is in progress |
+| `FINAL` | A followed team's game just ended (shown for up to 2 hours) |
+| `NO_GAME` | No followed team has an active or recent game |
+
+#### Active game attributes
+
+The playoff sensor exposes the same game-level attributes as the Team Tracker sensor (`game_id`, `start_time`, `period`, `clock`, `home_team`, `home_score`, etc.) for the currently active followed-team game. These are used by the card's game view.
+
+#### Playoff-specific attributes
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `league` | string | League identifier (e.g. `NHL`, `AHL`) |
+| `followed_teams` | list | Team IDs or abbreviations of the up-to-4 followed teams |
+| `current_round` | int | Highest round number with at least one active or scheduled series (0 if bracket not yet available) |
+| `bracket` | list | Full playoff bracket — list of round objects (see below) |
+| `next_game` | dict | Next upcoming game for any followed team |
+| `game_events` | list | Goals and penalties for the currently active followed-team game |
+
+#### Bracket structure
+
+`bracket` is a list of round objects, sorted from earliest to latest round:
+
+```
+bracket:
+  - round_number: 1
+    round_name: "1st Round"          # NHL; HockeyTech: "Round 1", "Finals", "Championship", etc.
+    series:
+      - series_letter: "A"
+        team1_id: "COL"              # Team abbreviation (NHL) or numeric ID (HockeyTech)
+        team1_name: "Colorado Avalanche"
+        team1_abbrev: "COL"
+        team1_logo_url: "https://..."
+        team1_wins: 3
+        team1_is_followed: true      # true if this team is in the followed list
+        team2_id: "DAL"
+        team2_name: "Dallas Stars"
+        team2_abbrev: "DAL"
+        team2_logo_url: "https://..."
+        team2_wins: 1
+        team2_is_followed: false
+        status: "active"             # "scheduled" | "active" | "complete"
+        winner_id: null              # team ID/abbrev of winner, or null if series not over
+        game_state: "LIVE"           # "LIVE" | "PRE" | "FINAL" | null (no game today)
+        game_score: "2-1"            # current game score if LIVE, else null
+        game_period: 2               # current period if LIVE, else null
+        game_clock: "14:32"          # game clock if LIVE, else null
+```
 
 ---
 
