@@ -245,8 +245,10 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         game_score = None
         game_period = None
         game_clock = None
+        game_start_time = None
         if active_raw:
             raw_state = active_raw.get("gameState", "")
+            game_start_time = active_raw.get("startTimeUTC")
             if raw_state in NHL_LIVE_STATES:
                 game_state = GAME_STATE_LIVE
                 home = active_raw.get("homeTeam", {})
@@ -278,6 +280,7 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "status": status,
             "winner_id": winner_id,
             "game_state": game_state,
+            "game_start_time": game_start_time,
             "game_score": game_score,
             "game_period": game_period,
             "game_clock": game_clock,
@@ -657,13 +660,21 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             s["game_score"] = None
             s["game_period"] = None
             s["game_clock"] = None
+            s["game_start_time"] = None
             if active_sb:
                 s["game_state"] = GAME_STATE_LIVE
+                s["game_start_time"] = active_sb.get("GameDateISO8601")
                 s["game_score"] = f"{active_sb.get('HomeGoals',0)}-{active_sb.get('VisitorGoals',0)}"
                 s["game_period"] = active_sb.get("Period")
                 s["game_clock"] = active_sb.get("GameClock")
             elif self._ht_is_today(s, scorebar_by_letter.get(letter, [])):
                 s["game_state"] = GAME_STATE_PRE
+                today_pre = next(
+                    (g for g in scorebar_by_letter.get(letter, [])
+                     if str(g.get("GameStatus", "")) == "1"),
+                    None,
+                )
+                s["game_start_time"] = today_pre.get("GameDateISO8601") if today_pre else None
 
         # Cluster into rounds by start date
         sorted_series = sorted(series_map.values(), key=lambda s: s.get("first_game_date", ""))
@@ -1074,21 +1085,42 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         await self._send_notifications(targets, f"GOAL! {scoring_team} scores!", msg)
                     self._notif_goal_count[our_id] = len(our_goals)
 
-        # Win
-        if opts.get(CONF_NOTIFY_WIN_ENABLED) and game_id and self._notif_win_sent.get(our_id) != game_id:
+        # Win — identify the actual winning followed team (handles both-teams-followed case)
+        if opts.get(CONF_NOTIFY_WIN_ENABLED) and game_id and state == GAME_STATE_FINAL:
             targets = self._parse_targets(opts.get(CONF_NOTIFY_WIN_TARGETS, []))
-            if targets and state == GAME_STATE_FINAL:
-                start_time = data.get("start_time")
-                recent = False
-                if start_time:
-                    try:
-                        start = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
-                        recent = (datetime.now(timezone.utc) - start).total_seconds() < 43200
-                    except (ValueError, TypeError):
-                        pass
-                if recent and our_score is not None and opp_score is not None and our_score > opp_score:
-                    await self._send_notifications(targets, f"{our_team} Wins!", f"Final: {our_team} {our_score}, {opp_team} {opp_score}. {our_team} wins!")
-                    self._notif_win_sent[our_id] = game_id
+            if targets:
+                home_id_str = str(data.get("home_team_id") or "")
+                away_id_str = str(data.get("away_team_id") or "")
+                home_scr = data.get("home_score") or 0
+                away_scr = data.get("away_score") or 0
+                home_name = data.get("home_team", "")
+                away_name = data.get("away_team", "")
+
+                if home_scr > away_scr and home_id_str in self.followed_team_ids:
+                    winner_id, winner_name, winner_scr = home_id_str, home_name, home_scr
+                    loser_name, loser_scr = away_name, away_scr
+                elif away_scr > home_scr and away_id_str in self.followed_team_ids:
+                    winner_id, winner_name, winner_scr = away_id_str, away_name, away_scr
+                    loser_name, loser_scr = home_name, home_scr
+                else:
+                    winner_id = None
+
+                if winner_id and self._notif_win_sent.get(winner_id) != game_id:
+                    start_time = data.get("start_time")
+                    recent = False
+                    if start_time:
+                        try:
+                            start = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
+                            recent = (datetime.now(timezone.utc) - start).total_seconds() < 43200
+                        except (ValueError, TypeError):
+                            pass
+                    if recent:
+                        await self._send_notifications(
+                            targets,
+                            f"{winner_name} Wins!",
+                            f"Final: {winner_name} {winner_scr}, {loser_name} {loser_scr}. {winner_name} wins!",
+                        )
+                        self._notif_win_sent[winner_id] = game_id
 
     async def _send_notifications(self, targets: list[str], title: str, message: str) -> None:
         for target in targets:
