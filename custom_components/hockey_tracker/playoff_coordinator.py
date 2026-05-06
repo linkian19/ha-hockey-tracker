@@ -778,11 +778,13 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "clock": game.get("GameClock"),
             "home_team": f"{game.get('HomeCity','')} {game.get('HomeNickname','')}".strip(),
             "home_team_id": home_id,
+            "home_team_abbrev": game.get("HomeCode", game.get("home_team_code", "")),
             "home_score": game.get("HomeGoals", 0),
             "home_shots": home_shots,
             "home_logo_url": self._upscale_ht_logo(game.get("HomeLogo")) or self._logo_cache.get(home_id),
             "away_team": f"{game.get('VisitorCity','')} {game.get('VisitorNickname','')}".strip(),
             "away_team_id": vis_id,
+            "away_team_abbrev": game.get("VisitorCode", game.get("visiting_team_code", "")),
             "away_score": game.get("VisitorGoals", 0),
             "away_shots": away_shots,
             "away_logo_url": self._upscale_ht_logo(game.get("VisitorLogo")) or self._logo_cache.get(vis_id),
@@ -1039,6 +1041,16 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 except (ValueError, TypeError):
                     pass
 
+        # Build abbrev → team name map so goal notifications name the correct scoring team
+        # For NHL, home_team_id IS the abbrev. For HT, home_team_abbrev is separate.
+        home_abbrev = data.get("home_team_abbrev") or data.get("home_team_id", "")
+        away_abbrev = data.get("away_team_abbrev") or data.get("away_team_id", "")
+        team_name_by_abbrev: dict[str, str] = {}
+        if home_abbrev:
+            team_name_by_abbrev[home_abbrev] = data.get("home_team") or our_team or home_abbrev
+        if away_abbrev:
+            team_name_by_abbrev[away_abbrev] = data.get("away_team") or opp_team or away_abbrev
+
         # Goal
         if opts.get(CONF_NOTIFY_GOAL_ENABLED) and state == GAME_STATE_LIVE and game_id:
             targets = self._parse_targets(opts.get(CONF_NOTIFY_GOAL_TARGETS, []))
@@ -1052,11 +1064,14 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     for goal in our_goals[:len(our_goals) - prev]:
                         scorer = goal.get("player_name", "")
                         tag = " (PP)" if goal.get("is_power_play") else " (SH)" if goal.get("is_short_handed") else " (EN)" if goal.get("is_empty_net") else ""
+                        # Use the goal's team_abbrev to get the correct team name
+                        scoring_abbrev = goal.get("team_abbrev", "")
+                        scoring_team = team_name_by_abbrev.get(scoring_abbrev) or our_team
                         score_str = f"{our_score}–{opp_score}" if our_score is not None else ""
                         msg = f"{scorer}{tag} — P{goal.get('period','')} {goal.get('time','')}".strip()
                         if score_str:
                             msg += f" | {score_str}"
-                        await self._send_notifications(targets, f"GOAL! {our_team} scores!", msg)
+                        await self._send_notifications(targets, f"GOAL! {scoring_team} scores!", msg)
                     self._notif_goal_count[our_id] = len(our_goals)
 
         # Win
