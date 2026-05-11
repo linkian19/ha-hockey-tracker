@@ -35,7 +35,7 @@ A [Home Assistant](https://www.home-assistant.io/) custom integration that track
 - Full playoff bracket for any supported league — all rounds, all series
 - Follow up to 4 teams — their series are highlighted in the bracket view
 - Live game data for any followed team during playoff games (scores, period, clock, shots, events)
-- Bracket data automatically clustered into rounds (NHL uses explicit round data; other leagues group series by start-date proximity)
+- Bracket data clustered into rounds — NHL uses explicit round data from the API; other leagues use a team-conflict algorithm (a team can only appear in one series per round, so East and West conference series are never collapsed into the wrong round)
 - Per-team notifications — win, pre-game, and goal alerts for any followed team
 - Adaptive polling identical to the Team Tracker — fast during live games, slow when idle
 
@@ -252,7 +252,7 @@ The playoff sensor exposes the same game-level attributes as the Team Tracker se
 |-----------|------|-------------|
 | `league` | string | League identifier (e.g. `NHL`, `AHL`) |
 | `followed_teams` | list | Team IDs or abbreviations of the up-to-4 followed teams |
-| `current_round` | int | Highest round number with at least one active or scheduled series (0 if bracket not yet available) |
+| `current_round` | int | Highest round number with at least one active series; falls back to the lowest scheduled round; 0 if bracket not yet available |
 | `bracket` | list | Full playoff bracket — list of round objects (see below) |
 | `next_game` | dict | Next upcoming game for any followed team |
 | `game_events` | list | Goals and penalties for the currently active followed-team game |
@@ -264,7 +264,7 @@ The playoff sensor exposes the same game-level attributes as the Team Tracker se
 ```
 bracket:
   - round_number: 1
-    round_name: "1st Round"          # NHL; HockeyTech: "Round 1", "Finals", "Championship", etc.
+    round_name: "1st Round"          # NHL; HockeyTech: per-league name (e.g. "First Round", "Division Semifinals", "Division Finals")
     series:
       - series_letter: "A"
         team1_id: "COL"              # Team abbreviation (NHL) or numeric ID (HockeyTech)
