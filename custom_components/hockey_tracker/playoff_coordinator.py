@@ -699,31 +699,38 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return rounds
 
     def _cluster_into_rounds(self, sorted_series: list[dict]) -> list[dict]:
-        """Group series by start date proximity into round buckets."""
+        """Group series into rounds: no team can appear in the same round twice.
+
+        Each series is placed into the earliest existing bucket where neither
+        team is already present, falling back to opening a new bucket. This
+        correctly handles leagues where the same inter-round gap can be shorter
+        than the intra-round spread (e.g. AHL East/West series start dates).
+        """
         rounds: list[list[dict]] = []
-        bucket: list[dict] = []
-        bucket_date: datetime | None = None
+        round_teams: list[set] = []
 
         for s in sorted_series:
-            raw = s.get("first_game_date", "")
-            try:
-                this_dt = datetime.fromisoformat(raw[:10])
-            except (ValueError, TypeError):
-                bucket.append(s)
-                continue
-            if bucket_date is None:
-                bucket_date = this_dt
-                bucket.append(s)
-            elif (this_dt - bucket_date).days <= ROUND_DATE_WINDOW:
-                bucket.append(s)
-                bucket_date = this_dt  # roll forward so same-round gaps accumulate correctly
-            else:
-                rounds.append(bucket)
-                bucket = [s]
-                bucket_date = this_dt
-
-        if bucket:
-            rounds.append(bucket)
+            t1 = s.get("team1_id") or ""
+            t2 = s.get("team2_id") or ""
+            placed = False
+            for i, bucket in enumerate(rounds):
+                used = round_teams[i]
+                if (not t1 or t1 not in used) and (not t2 or t2 not in used):
+                    bucket.append(s)
+                    if t1:
+                        used.add(t1)
+                    if t2:
+                        used.add(t2)
+                    placed = True
+                    break
+            if not placed:
+                rounds.append([s])
+                new_used: set = set()
+                if t1:
+                    new_used.add(t1)
+                if t2:
+                    new_used.add(t2)
+                round_teams.append(new_used)
 
         result = []
         for i, series_list in enumerate(rounds, start=1):
@@ -927,13 +934,29 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     @staticmethod
     def _current_round_number(bracket: list[dict]) -> int:
-        """Return the highest round number that has at least one active/incomplete series."""
-        current = 0
+        """Return the current active round.
+
+        Prefers the highest round where at least one series has status 'active'
+        (games have been played). Falls back to the lowest round with any
+        'scheduled' series (upcoming round, teams known but no games yet).
+        This prevents future TBD rounds (e.g. Stanley Cup Finals) from being
+        selected when an earlier round is still being played.
+        """
+        active_round = 0
+        earliest_scheduled: int | None = None
         for round_obj in bracket:
+            rn = round_obj["round_number"]
             for s in round_obj.get("series", []):
-                if s.get("status") in ("active", "scheduled"):
-                    current = max(current, round_obj["round_number"])
-        return current or (bracket[-1]["round_number"] if bracket else 0)
+                if s.get("status") == "active":
+                    active_round = max(active_round, rn)
+                elif s.get("status") == "scheduled":
+                    if earliest_scheduled is None or rn < earliest_scheduled:
+                        earliest_scheduled = rn
+        if active_round:
+            return active_round
+        if earliest_scheduled is not None:
+            return earliest_scheduled
+        return bracket[-1]["round_number"] if bracket else 0
 
     @staticmethod
     def _ht_is_today(series: dict, sb_games: list[dict]) -> bool:
