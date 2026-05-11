@@ -50,58 +50,6 @@ _LOGGER = logging.getLogger(__name__)
 # How long to cache the playoff season ID (rarely changes within a season)
 _SEASON_CACHE_TTL = 43200  # 12 hours
 
-# Per-league playoff round names, keyed by round number.
-# The HockeyTech schedule only includes rounds that have been confirmed, so
-# total_rounds in the schedule is always <= the league's actual round count.
-# Naming from total_rounds alone produces wrong names (e.g. Round 3 of 3
-# becomes "Championship" when it's really "Division Finals" in a 5-round league).
-_LEAGUE_ROUND_NAMES: dict[str, dict[int, str]] = {
-    "AHL": {
-        1: "First Round",
-        2: "Division Semifinals",
-        3: "Division Finals",
-        4: "Conference Finals",
-        5: "Calder Cup Finals",
-    },
-    "ECHL": {
-        1: "First Round",
-        2: "Semifinals",
-        3: "Kelly Cup Finals",
-    },
-    "PWHL": {
-        1: "Playoffs",
-        2: "PWHL Finals",
-    },
-    "OHL": {
-        1: "First Round",
-        2: "Second Round",
-        3: "Third Round",
-        4: "OHL Finals",
-    },
-    "WHL": {
-        1: "First Round",
-        2: "Second Round",
-        3: "Third Round",
-        4: "WHL Finals",
-    },
-    "QMJHL": {
-        1: "First Round",
-        2: "Second Round",
-        3: "Third Round",
-        4: "President's Cup Finals",
-    },
-    "USHL": {
-        1: "First Round",
-        2: "Semifinals",
-        3: "Clark Cup Finals",
-    },
-    "BCHL": {
-        1: "First Round",
-        2: "Semifinals",
-        3: "Doyle Cup Finals",
-    },
-}
-
 
 class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """Polls playoff bracket data for up to 4 followed teams."""
@@ -792,9 +740,9 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             })
         return result
 
-    def _ht_round_name(self, round_num: int) -> str:
-        names = _LEAGUE_ROUND_NAMES.get(self.league, {})
-        return names.get(round_num, f"Round {round_num}")
+    @staticmethod
+    def _ht_round_name(round_num: int) -> str:
+        return f"Round {round_num}"
 
     def _ht_find_followed_game(self, scorebar: list[dict]) -> dict | None:
         live = next(

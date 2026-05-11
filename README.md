@@ -264,7 +264,7 @@ The playoff sensor exposes the same game-level attributes as the Team Tracker se
 ```
 bracket:
   - round_number: 1
-    round_name: "1st Round"          # NHL; HockeyTech: per-league name (e.g. "First Round", "Division Semifinals", "Division Finals")
+    round_name: "1st Round"          # NHL; HockeyTech: "Round 1", "Round 2", etc.
     series:
       - series_letter: "A"
         team1_id: "COL"              # Team abbreviation (NHL) or numeric ID (HockeyTech)
