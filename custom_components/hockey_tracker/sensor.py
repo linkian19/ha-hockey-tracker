@@ -7,7 +7,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import ATTRIBUTION, CONF_ENTRY_TYPE, CONF_TEAM_NAME, DOMAIN, ENTRY_TYPE_PLAYOFF
+from .const import ATTRIBUTION, CONF_ENTRY_TYPE, CONF_TEAM_NAME, DOMAIN, ENTRY_TYPE_PLAYOFF, GAME_STATE_NONE
 from .coordinator import HockeyCoordinator
 from .playoff_sensor import PlayoffSensor
 
@@ -45,7 +45,7 @@ class HockeyGameSensor(CoordinatorEntity[HockeyCoordinator], SensorEntity):
 
     @property
     def native_value(self) -> str:
-        return self.coordinator.data.get("game_state", "UNKNOWN")
+        return self.coordinator.data.get("game_state", GAME_STATE_NONE)
 
     @property
     def icon(self) -> str:

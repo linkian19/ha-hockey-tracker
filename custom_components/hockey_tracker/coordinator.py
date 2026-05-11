@@ -182,7 +182,10 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     @staticmethod
     def _hours_until(iso_date: str) -> float | None:
         try:
-            return (datetime.fromisoformat(iso_date) - datetime.now(timezone.utc)).total_seconds() / 3600
+            dt = datetime.fromisoformat(iso_date)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return (dt - datetime.now(timezone.utc)).total_seconds() / 3600
         except (ValueError, TypeError):
             return None
 

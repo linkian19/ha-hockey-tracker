@@ -12,8 +12,8 @@ from .playoff_coordinator import PlayoffCoordinator
 
 _GAME_ATTRS = (
     "game_id", "start_time", "period", "clock",
-    "home_team", "home_team_id", "home_score", "home_shots", "home_logo_url",
-    "away_team", "away_team_id", "away_score", "away_shots", "away_logo_url",
+    "home_team", "home_team_id", "home_team_abbrev", "home_score", "home_shots", "home_logo_url",
+    "away_team", "away_team_id", "away_team_abbrev", "away_score", "away_shots", "away_logo_url",
     "is_home", "team_logo_url", "venue", "last_fetched",
 )
 

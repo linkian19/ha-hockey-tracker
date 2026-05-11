@@ -131,10 +131,10 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         next_game = data.get("next_game")
         if next_game and next_game.get("game_date"):
             try:
-                hours = (
-                    datetime.fromisoformat(next_game["game_date"].replace("Z", "+00:00"))
-                    - datetime.now(timezone.utc)
-                ).total_seconds() / 3600
+                dt = datetime.fromisoformat(next_game["game_date"].replace("Z", "+00:00"))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                hours = (dt - datetime.now(timezone.utc)).total_seconds() / 3600
                 if hours <= 6:
                     return SCAN_INTERVAL_GAME_SOON
                 if hours <= 24:
@@ -253,7 +253,10 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 game_state = GAME_STATE_LIVE
                 home = active_raw.get("homeTeam", {})
                 away = active_raw.get("awayTeam", {})
-                game_score = f"{home.get('score', 0)}-{away.get('score', 0)}"
+                top_is_home = home.get("abbrev") == top_id
+                t1_score = home.get("score", 0) if top_is_home else away.get("score", 0)
+                t2_score = away.get("score", 0) if top_is_home else home.get("score", 0)
+                game_score = f"{t1_score}-{t2_score}"
                 pd = active_raw.get("periodDescriptor", {})
                 game_period = pd.get("number")
                 clock_data = active_raw.get("clock", {})
@@ -642,9 +645,11 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Determine series status + live game info
         for letter, s in series_map.items():
             t1w, t2w = s["team1_wins"], s["team2_wins"]
-            if t1w == 4 or t2w == 4:
+            total_games = len(s["_games"])
+            required_wins = (total_games + 1) // 2 if total_games > 0 else 4
+            if t1w >= required_wins or t2w >= required_wins:
                 s["status"] = "complete"
-                s["winner_id"] = s["team1_id"] if t1w == 4 else s["team2_id"]
+                s["winner_id"] = s["team1_id"] if t1w > t2w else s["team2_id"]
             elif t1w > 0 or t2w > 0:
                 s["status"] = "active"
                 s["winner_id"] = None
@@ -666,7 +671,10 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if active_sb:
                 s["game_state"] = GAME_STATE_LIVE
                 s["game_start_time"] = active_sb.get("GameDateISO8601")
-                s["game_score"] = f"{active_sb.get('HomeGoals',0)}-{active_sb.get('VisitorGoals',0)}"
+                sb_home_id = str(active_sb.get("HomeID", ""))
+                t1_goals = active_sb.get("HomeGoals", 0) if sb_home_id == s["team1_id"] else active_sb.get("VisitorGoals", 0)
+                t2_goals = active_sb.get("VisitorGoals", 0) if sb_home_id == s["team1_id"] else active_sb.get("HomeGoals", 0)
+                s["game_score"] = f"{t1_goals}-{t2_goals}"
                 s["game_period"] = active_sb.get("Period")
                 s["game_clock"] = active_sb.get("GameClock")
             elif self._ht_is_today(s, scorebar_by_letter.get(letter, [])):
@@ -708,6 +716,7 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 bucket.append(s)
             elif (this_dt - bucket_date).days <= ROUND_DATE_WINDOW:
                 bucket.append(s)
+                bucket_date = this_dt  # roll forward so same-round gaps accumulate correctly
             else:
                 rounds.append(bucket)
                 bucket = [s]
@@ -933,7 +942,11 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if str(g.get("GameStatus", "")) == "1":
                 raw = g.get("GameDateISO8601", "")
                 try:
-                    if datetime.fromisoformat(raw).astimezone(timezone.utc).date() == today:
+                    dt = datetime.fromisoformat(raw)
+                    # Treat naive timestamps as UTC — consistent with _ht_parse_dt convention
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    if dt.date() == today:
                         return True
                 except (ValueError, TypeError):
                     pass
