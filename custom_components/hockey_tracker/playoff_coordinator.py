@@ -65,10 +65,8 @@ _LEAGUE_ROUND_NAMES: dict[str, dict[int, str]] = {
     },
     "ECHL": {
         1: "First Round",
-        2: "Division Semifinals",
-        3: "Division Finals",
-        4: "Conference Finals",
-        5: "Kelly Cup Finals",
+        2: "Semifinals",
+        3: "Kelly Cup Finals",
     },
     "PWHL": {
         1: "Playoffs",
