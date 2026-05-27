@@ -170,12 +170,14 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Find most-relevant active game for any followed team
         active_game_raw = self._nhl_find_followed_game(all_games)
         landing = None
+        playbyplay = None
         if active_game_raw and active_game_raw.get("gameState") in NHL_LIVE_STATES | NHL_FINAL_STATES:
             game_id = active_game_raw.get("id")
             if game_id:
                 landing = await self._fetch_nhl_landing(game_id)
+                playbyplay = await self._fetch_nhl_playbyplay(game_id)
 
-        game_data = self._nhl_normalize_game(active_game_raw, landing) if active_game_raw else self._empty_state()
+        game_data = self._nhl_normalize_game(active_game_raw, landing, playbyplay) if active_game_raw else self._empty_state()
 
         # Schedule cache for next-game lookup
         schedule_games = await self._get_nhl_schedule_cached()
@@ -319,7 +321,7 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         abbrevs = {game.get("awayTeam", {}).get("abbrev"), game.get("homeTeam", {}).get("abbrev")}
         return bool(abbrevs & set(self.followed_team_ids))
 
-    def _nhl_normalize_game(self, game: dict, landing: dict | None = None) -> dict[str, Any]:
+    def _nhl_normalize_game(self, game: dict, landing: dict | None = None, playbyplay: dict | None = None) -> dict[str, Any]:
         away = game.get("awayTeam", {})
         home = game.get("homeTeam", {})
         raw_state = game.get("gameState", "")
@@ -373,7 +375,7 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "is_home": is_home,
             "team_logo_url": self._nhl_logo(tracked),
             "venue": game.get("venue", {}).get("default"),
-            "game_events": self._nhl_extract_events(landing) if landing else [],
+            "game_events": self._nhl_extract_events(landing, playbyplay) if landing else [],
         }
 
     async def _get_nhl_schedule_cached(self) -> list[dict]:
@@ -433,7 +435,17 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.debug("NHL landing fetch failed for %s: %s", game_id, err)
             return None
 
-    def _nhl_extract_events(self, landing: dict) -> list[dict]:
+    async def _fetch_nhl_playbyplay(self, game_id: int) -> dict | None:
+        """Fetch NHL play-by-play — provides individual shot-on-goal events."""
+        try:
+            return await self._fetch_json(f"{NHL_API_BASE}/gamecenter/{game_id}/play-by-play")
+        except Exception as err:
+            _LOGGER.debug("NHL play-by-play fetch failed for %s: %s", game_id, err)
+            return None
+
+    def _nhl_extract_events(self, landing: dict, playbyplay: dict | None = None) -> list[dict]:
+        # Goalie pull: no explicit goalie_pull events in landing summary. The
+        # is_empty_net flag (derived from situationCode) on goals captures this context.
         events: list[dict] = []
         summ = landing.get("summary", {})
         for period_data in summ.get("scoring", []):
@@ -474,6 +486,38 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "description": pen.get("descKey", "").replace("-", " ").title(),
                     "minutes": pen.get("duration"),
                 })
+        if playbyplay:
+            away_id = playbyplay.get("awayTeam", {}).get("id")
+            home_id = playbyplay.get("homeTeam", {}).get("id")
+            team_abbrev_map: dict = {}
+            if away_id is not None:
+                team_abbrev_map[away_id] = playbyplay.get("awayTeam", {}).get("abbrev", "")
+            if home_id is not None:
+                team_abbrev_map[home_id] = playbyplay.get("homeTeam", {}).get("abbrev", "")
+            roster_map: dict = {}
+            for spot in playbyplay.get("rosterSpots", []):
+                pid = spot.get("playerId")
+                if pid is not None:
+                    first = spot.get("firstName", {}).get("default", "")
+                    last = spot.get("lastName", {}).get("default", "")
+                    roster_map[pid] = f"{first} {last}".strip()
+            for play in playbyplay.get("plays", []):
+                if play.get("typeDescKey") != "shot-on-goal":
+                    continue
+                details = play.get("details", {})
+                owner_id = details.get("eventOwnerTeamId")
+                team_abbrev = team_abbrev_map.get(owner_id, "")
+                shooter_id = details.get("shootingPlayerId")
+                events.append({
+                    "type": "shot",
+                    "period": play.get("periodDescriptor", {}).get("number", 0),
+                    "time": play.get("timeInPeriod", ""),
+                    "team_abbrev": team_abbrev,
+                    "is_tracked_team": team_abbrev in self.followed_team_ids,
+                    "player_name": roster_map.get(shooter_id, ""),
+                    "shot_type": details.get("shotType", ""),
+                })
+
         events.sort(key=lambda e: (e.get("period", 0), self._time_to_sec(e.get("time", "0:00"))), reverse=True)
         return events
 
@@ -869,6 +913,12 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return None
 
     def _ht_extract_events(self, summary: dict) -> list[dict]:
+        # Shot events: gameSummary provides aggregate shots per period (consumed as
+        # home_shots/away_shots) but not individual shot play events. A separate
+        # play-by-play feed would be required — not currently fetched.
+        #
+        # Goalie pull: gameSummary has no explicit goalie_pull play events. The
+        # is_empty_net flag on goals already captures this context.
         events: list[dict] = []
         for period in summary.get("periods") or []:
             period_num = int((period.get("info") or {}).get("id", 0))
