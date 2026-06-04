@@ -320,9 +320,10 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             home_shots = summary.get("homeTeam", {}).get("stats", {}).get("shots")
             away_shots = summary.get("visitingTeam", {}).get("stats", {}).get("shots")
 
+        game_id = game.get("GameID") or game.get("ID")
         return {
             "game_state": game_state,
-            "game_id": game.get("GameID") or game.get("ID"),
+            "game_id": game_id,
             "start_time": game.get("GameDateISO8601"),
             "period": game.get("Period"),
             "clock": game.get("GameClock"),
@@ -339,6 +340,7 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "is_home": is_home,
             "team_logo_url": self._my_logo(),
             "venue": game.get("venue_name"),
+            "game_url": self._ht_game_url(game, str(game_id)) if game_id else None,
             "game_events": self._ht_extract_events(summary) if summary else [],
         }
 
@@ -669,9 +671,10 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             away_sog = away.get("sog")
             home_sog = home.get("sog")
 
+        game_id = game.get("id")
         return {
             "game_state": game_state,
-            "game_id": game.get("id"),
+            "game_id": game_id,
             "start_time": game.get("startTimeUTC"),
             "period": period,
             "clock": clock,
@@ -688,6 +691,7 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "is_home": is_home,
             "team_logo_url": self._my_logo(),
             "venue": game.get("venue", {}).get("default"),
+            "game_url": NHL_GAME_URL.format(game_id=game_id) if game_id else None,
             "game_events": self._nhl_extract_events(landing, playbyplay) if landing else [],
         }
 
@@ -980,6 +984,7 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "is_home": None,
             "team_logo_url": self._my_logo(),
             "venue": None,
+            "game_url": None,
             "game_events": [],
         }
 
