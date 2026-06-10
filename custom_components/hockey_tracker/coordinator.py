@@ -11,6 +11,7 @@ import aiohttp
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import (
@@ -71,13 +72,14 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.league: str = entry.data[CONF_LEAGUE]
         self.team_id: str = entry.data[CONF_TEAM_ID]
         self.team_logo_url: str | None = entry.data.get("team_logo_url")
-        self._session: aiohttp.ClientSession | None = None
         self._schedule_cache: list[dict] | None = None
         self._schedule_cache_time: datetime | None = None
         # Server-side FINAL window tracking — keyed by game_id so it survives
         # browser refreshes and HA restarts within the same process.
         self._game_final_at: datetime | None = None
         self._game_final_id: str | None = None
+        self._last_game_summary: dict | None = None
+        self._last_game_fetch_attempted: bool = False
         # Logo cache keyed by team ID (HockeyTech) or abbreviation (NHL).
         # HockeyTech CDN paths include a version suffix that cannot be constructed
         # from team ID alone, so we populate this from live API responses.
@@ -129,18 +131,37 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Tracking by game_id ensures the window is not restarted by browser
         # refreshes or new HA frontend sessions.
         if data.get("game_state") == GAME_STATE_FINAL:
-            game_id = str(data.get("game_id", ""))
+            game_id = str(data.get("game_id") or "")
             if self._game_final_id != game_id:
                 self._game_final_id = game_id
                 self._game_final_at = datetime.now(timezone.utc)
+                self._last_game_summary = {
+                    k: data.get(k) for k in (
+                        "game_id", "start_time",
+                        "home_team", "home_team_id", "home_score", "home_shots", "home_logo_url",
+                        "away_team", "away_team_id", "away_score", "away_shots", "away_logo_url",
+                        "is_home", "team_logo_url", "venue", "game_url",
+                    )
+                }
+                self._last_game_summary["game_events"] = [
+                    e for e in data.get("game_events", []) if e.get("type") != "shot"
+                ]
             elif self._game_final_at and (
                 datetime.now(timezone.utc) - self._game_final_at
             ).total_seconds() > FINAL_DISPLAY_SECONDS:
                 data["game_state"] = GAME_STATE_NONE
+                self._game_final_id = None
+                self._game_final_at = None
         else:
             self._game_final_id = None
             self._game_final_at = None
 
+        # Populate last_game_summary from schedule if missing (e.g. after HA restart).
+        # Runs at most once per session — skipped as soon as summary is populated.
+        if self._last_game_summary is None and not self._last_game_fetch_attempted and self.league == LEAGUE_NHL:
+            await self._populate_last_game_nhl()
+
+        data["last_game_summary"] = self._last_game_summary
         data["last_fetched"] = datetime.now(timezone.utc).isoformat()
 
         self.update_interval = timedelta(seconds=self._next_interval(data))
@@ -160,7 +181,10 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             period = data.get("period")
             clock = data.get("clock")
             if period:
-                p = int(period)
+                try:
+                    p = int(period)
+                except (TypeError, ValueError):
+                    p = 0
                 if p >= 4 or (p == 3 and clock == "0:00"):
                     return SCAN_INTERVAL_GAME_ENDING
             return SCAN_INTERVAL_LIVE
@@ -178,6 +202,45 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 if hours <= 24:
                     return SCAN_INTERVAL_GAME_TODAY
         return SCAN_INTERVAL_IDLE
+
+    async def _populate_last_game_nhl(self) -> None:
+        """Fetch the last completed NHL game from the schedule and populate _last_game_summary.
+
+        Called only when _last_game_summary is None (e.g. after HA restart). Makes one
+        extra API call (landing endpoint) the first time, then never again this session.
+        """
+        schedule = self._schedule_cache or []
+        completed = sorted(
+            [g for g in schedule
+             if g.get("gameState") in NHL_FINAL_STATES
+             and (g.get("awayTeam", {}).get("abbrev") == self.team_id
+                  or g.get("homeTeam", {}).get("abbrev") == self.team_id)],
+            key=lambda g: g.get("startTimeUTC", ""),
+            reverse=True,
+        )
+        if not completed:
+            return
+        game = completed[0]
+        game_id = game.get("id")
+        if not game_id:
+            return
+        self._last_game_fetch_attempted = True
+        landing = await self._fetch_nhl_landing(game_id)
+        playbyplay = await self._fetch_nhl_playbyplay(game_id)
+        if not landing:
+            return
+        game_data = self._nhl_normalize_game(game, landing, playbyplay)
+        self._last_game_summary = {
+            k: game_data.get(k) for k in (
+                "game_id", "start_time",
+                "home_team", "home_team_id", "home_score", "home_shots", "home_logo_url",
+                "away_team", "away_team_id", "away_score", "away_shots", "away_logo_url",
+                "is_home", "team_logo_url", "venue", "game_url",
+            )
+        }
+        self._last_game_summary["game_events"] = [
+            e for e in game_data.get("game_events", []) if e.get("type") != "shot"
+        ]
 
     @staticmethod
     def _hours_until(iso_date: str) -> float | None:
@@ -231,6 +294,31 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         data = self._ht_normalize_game(active, summary) if active else self._empty_state()
         data["recent_games"] = recent
         data["next_game"] = next_game
+
+        # Populate last_game_summary from scorebar if missing (e.g. after HA restart)
+        if self._last_game_summary is None and not self._last_game_fetch_attempted:
+            completed_ht = [g for g in team_games if str(g.get("GameStatus", "")) == "4"]
+            completed_ht.sort(key=lambda g: g.get("GameDateISO8601", ""), reverse=True)
+            if completed_ht:
+                last = completed_ht[0]
+                last_id = str(last.get("GameID") or last.get("ID") or "")
+                if last_id:
+                    self._last_game_fetch_attempted = True
+                    last_summary = await self._fetch_ht_game_summary(last_id)
+                    if last_summary:
+                        last_data = self._ht_normalize_game(last, last_summary)
+                        self._last_game_summary = {
+                            k: last_data.get(k) for k in (
+                                "game_id", "start_time",
+                                "home_team", "home_team_id", "home_score", "home_shots", "home_logo_url",
+                                "away_team", "away_team_id", "away_score", "away_shots", "away_logo_url",
+                                "is_home", "team_logo_url", "venue", "game_url",
+                            )
+                        }
+                        self._last_game_summary["game_events"] = [
+                            e for e in last_data.get("game_events", []) if e.get("type") != "shot"
+                        ]
+
         return data
 
     def _ht_find_active(self, team_games: list[dict]) -> dict | None:
@@ -426,7 +514,7 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         style) regardless of fmt=json, so we strip those before parsing.
         """
         try:
-            session = await self._get_session()
+            session = async_get_clientsession(self.hass)
             params = {
                 "feed": "statviewfeed",
                 "view": "gameSummary",
@@ -507,7 +595,7 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "fmt": "json",
         }
         base.update(params)
-        session = await self._get_session()
+        session = async_get_clientsession(self.hass)
         async with session.get(
             HOCKEYTECH_BASE,
             params=base,
@@ -855,7 +943,7 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return datetime.min.replace(tzinfo=timezone.utc)
 
     async def _fetch_json(self, url: str) -> dict[str, Any]:
-        session = await self._get_session()
+        session = async_get_clientsession(self.hass)
         async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
             resp.raise_for_status()
             return await resp.json(content_type=None)
@@ -988,11 +1076,3 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "game_events": [],
         }
 
-    async def _get_session(self) -> aiohttp.ClientSession:
-        if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession()
-        return self._session
-
-    async def async_close(self) -> None:
-        if self._session and not self._session.closed:
-            await self._session.close()

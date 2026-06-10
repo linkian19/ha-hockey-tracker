@@ -159,7 +159,7 @@ GAME_STATE_NONE = "NO_GAME"
 
 # NHL game states that map to our states
 NHL_LIVE_STATES = {"LIVE", "CRIT"}
-NHL_FINAL_STATES = {"FINAL", "OFF"}
+NHL_FINAL_STATES = {"FINAL", "OFF", "OVER"}
 NHL_PRE_STATES = {"FUT", "PRE"}
 
 # Game summary URLs for each league

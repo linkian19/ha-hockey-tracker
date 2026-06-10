@@ -207,6 +207,27 @@ Each entry in `game_events`:
 
 > Events are populated during live and final games via a second API call. HockeyTech leagues use the `gameSummary` endpoint; NHL uses `gamecenter/{id}/landing`. Pre-game and no-game states return an empty list.
 
+#### Last game summary (in-memory; populated on demand)
+
+Available in `NO_GAME` and `PRE` states to back the card's Last Game history view. Populated automatically on the first successful poll after HA restarts, and also snapshotted whenever a game transitions to `FINAL`. Cleared on integration reload.
+
+| Attribute | Description |
+|-----------|-------------|
+| `last_game_home_team` | Home team full name |
+| `last_game_home_score` | Home team final score |
+| `last_game_home_shots` | Home team shots on goal |
+| `last_game_home_logo_url` | Home team logo URL |
+| `last_game_away_team` | Away team full name |
+| `last_game_away_score` | Away team final score |
+| `last_game_away_shots` | Away team shots on goal |
+| `last_game_away_logo_url` | Away team logo URL |
+| `last_game_date` | ISO 8601 game start time |
+| `last_game_venue` | Arena name |
+| `last_game_url` | Link to the official game summary page |
+| `last_game_events` | Goals and penalties from the game (shot events excluded to keep attribute size small) |
+
+> If the card shows "No data — tap Refresh to load" after an HA reboot, the `hockey_tracker.force_refresh` service (or the card's refresh button) re-fetches this data without requiring a persistent store.
+
 #### Recent games
 
 | Attribute | Description |

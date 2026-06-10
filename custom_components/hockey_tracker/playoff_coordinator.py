@@ -11,6 +11,7 @@ import aiohttp
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import (
@@ -24,6 +25,7 @@ from .const import (
     CONF_NOTIFY_WIN_ENABLED,
     CONF_NOTIFY_WIN_TARGETS,
     DOMAIN,
+    FINAL_DISPLAY_SECONDS,
     GAME_STATE_FINAL,
     GAME_STATE_LIVE,
     GAME_STATE_NONE,
@@ -58,7 +60,6 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._entry = entry
         self.league: str = entry.data[CONF_LEAGUE]
         self.followed_team_ids: list[str] = list(entry.data.get(CONF_FOLLOWED_TEAMS, []))
-        self._session: aiohttp.ClientSession | None = None
         self._logo_cache: dict[str, str] = {}
 
         # HockeyTech-specific state
@@ -74,6 +75,11 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Bracket cache (shared for both leagues)
         self._bracket_cache: list[dict] | None = None
         self._bracket_cache_time: datetime | None = None
+
+        # Server-side FINAL window (mirrors HockeyCoordinator)
+        self._game_final_id: str | None = None
+        self._game_final_at: datetime | None = None
+        self._game_final_data: dict | None = None
 
         # Notification state per followed team
         self._notif_pregame_sent: dict[str, str] = {}   # team_id → game_id
@@ -109,6 +115,44 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raise UpdateFailed(f"Request failed: {err}") from err
 
         await self._maybe_notify(data)
+
+        # Manage post-game FINAL display window (mirrors HockeyCoordinator).
+        # The NHL scoreboard can drop a game shortly after it ends, so we track
+        # the window here rather than relying on the scoreboard to keep returning it.
+        if data.get("game_state") == GAME_STATE_FINAL:
+            game_id = str(data.get("game_id") or "")
+            if self._game_final_id != game_id:
+                self._game_final_id = game_id
+                self._game_final_at = datetime.now(timezone.utc)
+                self._game_final_data = {
+                    k: data.get(k) for k in (
+                        "game_id", "start_time", "period", "clock",
+                        "home_team", "home_team_id", "home_score", "home_shots", "home_logo_url",
+                        "away_team", "away_team_id", "away_score", "away_shots", "away_logo_url",
+                        "is_home", "team_logo_url", "venue", "game_events",
+                    )
+                }
+            elif self._game_final_at and (
+                datetime.now(timezone.utc) - self._game_final_at
+            ).total_seconds() > FINAL_DISPLAY_SECONDS:
+                data["game_state"] = GAME_STATE_NONE
+                self._game_final_id = None
+                self._game_final_at = None
+                self._game_final_data = None
+        elif data.get("game_state") == GAME_STATE_NONE and self._game_final_at:
+            elapsed = (datetime.now(timezone.utc) - self._game_final_at).total_seconds()
+            if elapsed <= FINAL_DISPLAY_SECONDS and self._game_final_data:
+                data.update(self._game_final_data)
+                data["game_state"] = GAME_STATE_FINAL
+            else:
+                self._game_final_id = None
+                self._game_final_at = None
+                self._game_final_data = None
+        else:
+            self._game_final_id = None
+            self._game_final_at = None
+            self._game_final_data = None
+
         data["last_fetched"] = datetime.now(timezone.utc).isoformat()
         self.update_interval = timedelta(seconds=self._next_interval(data))
         return data
@@ -119,7 +163,10 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             period = data.get("period")
             clock = data.get("clock")
             if period:
-                p = int(period)
+                try:
+                    p = int(period)
+                except (TypeError, ValueError):
+                    p = 0
                 if p >= 4 or (p == 3 and clock == "0:00"):
                     return SCAN_INTERVAL_GAME_ENDING
             return SCAN_INTERVAL_LIVE
@@ -147,7 +194,8 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     # ------------------------------------------------------------------
 
     async def _fetch_nhl_playoffs(self) -> dict[str, Any]:
-        year = datetime.now(timezone.utc).year
+        _now = datetime.now(timezone.utc)
+        year = _now.year if _now.month >= 4 else _now.year - 1
         bracket_raw = await self._fetch_json(f"{NHL_API_BASE}/playoff-bracket/{year}")
         scoreboard = await self._fetch_json(f"{NHL_API_BASE}/scoreboard/now")
 
@@ -179,9 +227,17 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         game_data = self._nhl_normalize_game(active_game_raw, landing, playbyplay) if active_game_raw else self._empty_state()
 
-        # Schedule cache for next-game lookup
+        # Schedule cache for next-game lookup and PRE fallback
         schedule_games = await self._get_nhl_schedule_cached()
         next_game = self._nhl_first_upcoming_followed(schedule_games)
+
+        # If the scoreboard has no active game but a followed-team game starts within
+        # 6 hours, synthesize a PRE state from the schedule so the coordinator polls
+        # at PRE interval (5 min) and fires the pre-game notification on time.
+        if game_data["game_state"] == GAME_STATE_NONE:
+            pre_game = self._nhl_find_schedule_pre(schedule_games)
+            if pre_game:
+                game_data = self._nhl_normalize_game(pre_game)
 
         return {
             **game_data,
@@ -427,6 +483,23 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "away_logo_url": self._nhl_logo(away.get("abbrev"), away.get("logo")),
             "venue": g.get("venue", {}).get("default", ""),
         }
+
+    def _nhl_find_schedule_pre(self, games: list[dict]) -> dict | None:
+        """Return the nearest upcoming followed-team game starting within 6 hours.
+
+        Used as a scoreboard fallback: the NHL scoreboard sometimes doesn't include
+        a game until it goes live, causing the coordinator to miss the PRE window.
+        """
+        now = datetime.now(timezone.utc)
+        candidates = sorted(
+            [g for g in games if self._nhl_team_in_game(g) and self._nhl_parse_dt(g) > now],
+            key=self._nhl_parse_dt,
+        )
+        if candidates:
+            hours = (self._nhl_parse_dt(candidates[0]) - now).total_seconds() / 3600
+            if hours <= 6:
+                return candidates[0]
+        return None
 
     async def _fetch_nhl_landing(self, game_id: int) -> dict | None:
         try:
@@ -890,7 +963,7 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def _fetch_ht_game_summary(self, game_id: str) -> dict | None:
         try:
-            session = await self._get_session()
+            session = async_get_clientsession(self.hass)
             params = {
                 "feed": "statviewfeed",
                 "view": "gameSummary",
@@ -964,7 +1037,7 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "fmt": "json",
         }
         base.update(params)
-        session = await self._get_session()
+        session = async_get_clientsession(self.hass)
         async with session.get(
             HOCKEYTECH_BASE, params=base, timeout=aiohttp.ClientTimeout(total=15)
         ) as resp:
@@ -1082,19 +1155,10 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         }
 
     async def _fetch_json(self, url: str) -> dict[str, Any]:
-        session = await self._get_session()
+        session = async_get_clientsession(self.hass)
         async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
             resp.raise_for_status()
             return await resp.json(content_type=None)
-
-    async def _get_session(self) -> aiohttp.ClientSession:
-        if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession()
-        return self._session
-
-    async def async_close(self) -> None:
-        if self._session and not self._session.closed:
-            await self._session.close()
 
     # ------------------------------------------------------------------
     # Notifications

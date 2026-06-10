@@ -74,4 +74,20 @@ class HockeyGameSensor(CoordinatorEntity[HockeyCoordinator], SensorEntity):
         attrs["team_name"] = self._team_name
         attrs["recent_games"] = data.get("recent_games", [])
         attrs["game_events"] = data.get("game_events", [])
+
+        lgs = data.get("last_game_summary")
+        if lgs:
+            attrs["last_game_away_team"] = lgs.get("away_team")
+            attrs["last_game_away_score"] = lgs.get("away_score")
+            attrs["last_game_away_shots"] = lgs.get("away_shots")
+            attrs["last_game_away_logo_url"] = lgs.get("away_logo_url")
+            attrs["last_game_home_team"] = lgs.get("home_team")
+            attrs["last_game_home_score"] = lgs.get("home_score")
+            attrs["last_game_home_shots"] = lgs.get("home_shots")
+            attrs["last_game_home_logo_url"] = lgs.get("home_logo_url")
+            attrs["last_game_date"] = lgs.get("start_time")
+            attrs["last_game_url"] = lgs.get("game_url")
+            attrs["last_game_events"] = lgs.get("game_events", [])
+            attrs["last_game_venue"] = lgs.get("venue")
+
         return attrs
