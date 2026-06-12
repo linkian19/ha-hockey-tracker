@@ -197,6 +197,10 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if next_game and next_game.get("game_date"):
             hours = self._hours_until(next_game["game_date"])
             if hours is not None:
+                if hours <= 0:
+                    # Game started recently but not yet visible on scoreboard;
+                    # poll at PRE rate until the live feed catches up.
+                    return SCAN_INTERVAL_PRE
                 if hours <= 6:
                     return SCAN_INTERVAL_GAME_SOON
                 if hours <= 24:
@@ -369,8 +373,10 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def _ht_first_upcoming(self, games: list[dict]) -> dict[str, Any] | None:
         now = datetime.now(timezone.utc)
+        # 30-min grace period so a game that just started but hasn't appeared on
+        # the scorebar yet still shows up as "next game" and keeps polls fast.
         upcoming = sorted(
-            [g for g in games if self._ht_parse_dt(g) >= now],
+            [g for g in games if self._ht_parse_dt(g) >= now - timedelta(minutes=30)],
             key=self._ht_parse_dt,
         )
         if not upcoming:
@@ -705,8 +711,10 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def _nhl_first_upcoming(self, games: list[dict]) -> dict[str, Any] | None:
         now = datetime.now(timezone.utc)
+        # 30-min grace period so a game that just started but hasn't appeared on
+        # the scoreboard yet still populates next_game and keeps polls fast.
         upcoming = sorted(
-            [g for g in games if self._nhl_parse_dt(g) > now],
+            [g for g in games if self._nhl_parse_dt(g) > now - timedelta(minutes=30)],
             key=self._nhl_parse_dt,
         )
         if not upcoming:

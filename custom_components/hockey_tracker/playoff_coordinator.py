@@ -181,6 +181,9 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 if dt.tzinfo is None:
                     dt = dt.replace(tzinfo=timezone.utc)
                 hours = (dt - datetime.now(timezone.utc)).total_seconds() / 3600
+                if hours <= 0:
+                    # Game started recently but not yet visible on scoreboard.
+                    return SCAN_INTERVAL_PRE
                 if hours <= 6:
                     return SCAN_INTERVAL_GAME_SOON
                 if hours <= 24:
@@ -463,8 +466,10 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def _nhl_first_upcoming_followed(self, games: list[dict]) -> dict | None:
         now = datetime.now(timezone.utc)
+        # 30-min grace period so a game that just started but hasn't appeared on
+        # the scoreboard yet still shows as next_game and keeps polls fast.
         upcoming = sorted(
-            [g for g in games if self._nhl_parse_dt(g) > now and self._nhl_team_in_game(g)],
+            [g for g in games if self._nhl_parse_dt(g) > now - timedelta(minutes=30) and self._nhl_team_in_game(g)],
             key=self._nhl_parse_dt,
         )
         if not upcoming:
@@ -489,10 +494,12 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         Used as a scoreboard fallback: the NHL scoreboard sometimes doesn't include
         a game until it goes live, causing the coordinator to miss the PRE window.
+        Also covers the brief period right after a scheduled start time before the
+        game appears as LIVE on the scoreboard (30-min grace window).
         """
         now = datetime.now(timezone.utc)
         candidates = sorted(
-            [g for g in games if self._nhl_team_in_game(g) and self._nhl_parse_dt(g) > now],
+            [g for g in games if self._nhl_team_in_game(g) and self._nhl_parse_dt(g) > now - timedelta(minutes=30)],
             key=self._nhl_parse_dt,
         )
         if candidates:
@@ -935,8 +942,10 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def _ht_first_upcoming_followed(self, schedule: list[dict]) -> dict | None:
         now = datetime.now(timezone.utc)
+        # 30-min grace period so a game that just started but hasn't appeared on
+        # the scorebar yet still shows as next_game and keeps polls fast.
         upcoming = sorted(
-            [g for g in schedule if self._ht_parse_dt(g) > now and self._ht_sched_team_in_game(g)],
+            [g for g in schedule if self._ht_parse_dt(g) > now - timedelta(minutes=30) and self._ht_sched_team_in_game(g)],
             key=self._ht_parse_dt,
         )
         if not upcoming:
