@@ -42,6 +42,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     coord = hass.data.get(DOMAIN, {}).get(entry_obj.config_entry_id)
                     if coord:
                         coord.clear_schedule_cache()
+                        coord.clear_final_window()
                         await coord.async_refresh()
 
         hass.services.async_register(

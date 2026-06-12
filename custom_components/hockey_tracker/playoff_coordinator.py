@@ -101,6 +101,12 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._bracket_cache = None
         self._bracket_cache_time = None
 
+    def clear_final_window(self) -> None:
+        """Clear the FINAL display window so the next refresh reflects current game state."""
+        self._game_final_id = None
+        self._game_final_at = None
+        self._game_final_data = None
+
     # ------------------------------------------------------------------
     # Main update
     # ------------------------------------------------------------------
