@@ -320,11 +320,14 @@ The integration automatically adjusts how often it polls based on game state:
 | Game in progress (LIVE) | 30 seconds |
 | Game today, not yet started (PRE) | 5 minutes |
 | Game just ended (FINAL) | 15 minutes |
+| Scheduled start time just passed, game not yet visible on live feed | 5 minutes |
 | Next game within 6 hours | 15 minutes |
 | Next game within 24 hours | 30 minutes |
 | Next game tomorrow or later | 2 hours |
 
 The 15-second interval at end of regulation and throughout OT ensures FINAL is detected as quickly as possible after the API updates. OT is sudden-death — the game can end at any clock time — so the fast poll covers the entire OT period rather than waiting for the clock to hit 0:00.
+
+The 5-minute interval after a scheduled start time covers a brief scoreboard lag window (typically 1–10 minutes for NHL) where the game has started but hasn't yet appeared as LIVE in the API feed. Without this, the coordinator would incorrectly fall back to the 2-hour idle interval during this window.
 
 ---
 
