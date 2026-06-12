@@ -111,8 +111,9 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._schedule_cache_time = None
 
     def clear_final_window(self) -> None:
-        """Clear the FINAL display window so the next refresh reflects current game state."""
-        self._game_final_id = None
+        """Expire the FINAL display window so the next refresh reflects current game state.
+        Intentionally keeps _game_final_id set: clearing it would cause the same game to
+        restart a fresh 2-hour window on the next poll (NHL keeps games in FINAL/OFF for hours)."""
         self._game_final_at = None
 
     # ------------------------------------------------------------------
