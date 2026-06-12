@@ -121,7 +121,11 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # the window here rather than relying on the scoreboard to keep returning it.
         if data.get("game_state") == GAME_STATE_FINAL:
             game_id = str(data.get("game_id") or "")
-            if self._game_final_id != game_id:
+            if self._game_final_id == game_id and self._game_final_at is None:
+                # Window already expired for this game. The NHL API keeps completed
+                # games in FINAL/OFF state for many hours, so suppress re-entry.
+                data["game_state"] = GAME_STATE_NONE
+            elif self._game_final_id != game_id:
                 self._game_final_id = game_id
                 self._game_final_at = datetime.now(timezone.utc)
                 self._game_final_data = {
@@ -135,8 +139,8 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             elif self._game_final_at and (
                 datetime.now(timezone.utc) - self._game_final_at
             ).total_seconds() > FINAL_DISPLAY_SECONDS:
+                # Mark window expired: keep game_id for suppression, clear rest.
                 data["game_state"] = GAME_STATE_NONE
-                self._game_final_id = None
                 self._game_final_at = None
                 self._game_final_data = None
         elif data.get("game_state") == GAME_STATE_NONE and self._game_final_at:

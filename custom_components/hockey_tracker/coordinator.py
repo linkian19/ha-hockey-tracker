@@ -132,7 +132,12 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # refreshes or new HA frontend sessions.
         if data.get("game_state") == GAME_STATE_FINAL:
             game_id = str(data.get("game_id") or "")
-            if self._game_final_id != game_id:
+            if self._game_final_id == game_id and self._game_final_at is None:
+                # Window already expired for this game. The NHL API keeps completed
+                # games in FINAL/OFF state for many hours, so we must suppress
+                # re-entry rather than clearing game_id and restarting the window.
+                data["game_state"] = GAME_STATE_NONE
+            elif self._game_final_id != game_id:
                 self._game_final_id = game_id
                 self._game_final_at = datetime.now(timezone.utc)
                 self._last_game_summary = {
@@ -149,8 +154,9 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             elif self._game_final_at and (
                 datetime.now(timezone.utc) - self._game_final_at
             ).total_seconds() > FINAL_DISPLAY_SECONDS:
+                # Mark window expired: keep game_id so the suppression branch above
+                # fires on subsequent polls; clear timestamp so it is detectable.
                 data["game_state"] = GAME_STATE_NONE
-                self._game_final_id = None
                 self._game_final_at = None
         else:
             self._game_final_id = None
