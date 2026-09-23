@@ -310,6 +310,21 @@ bracket:
 
 ---
 
+## Recorder / History
+
+The large list attributes are excluded from Home Assistant's recorder, so they are **not written to the history database**:
+
+| Sensor | Unrecorded attributes |
+|--------|-----------------------|
+| Team Tracker | `game_events`, `last_game_events`, `recent_games` |
+| Playoff Tracker | `game_events`, `bracket` |
+
+They are still present on the live entity, so the card, templates, and automations see them as usual. The sensor state (`PRE` / `LIVE` / `FINAL` / `NO_GAME`) and all other attributes (score, period, clock, teams, next/last game fields, etc.) are recorded normally, so history graphs and the logbook keep working.
+
+Without this, every 15–30 second poll during a live game could write a fresh 10–20 KB copy of the play-by-play and bracket to the database. Sensors over 16 KB also triggered the recorder's "State attributes … exceed maximum size" warning, after which **no** attributes were stored at all.
+
+---
+
 ## Polling Intervals
 
 The integration automatically adjusts how often it polls based on game state:

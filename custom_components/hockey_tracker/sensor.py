@@ -36,6 +36,8 @@ class HockeyGameSensor(CoordinatorEntity[HockeyCoordinator], SensorEntity):
 
     _attr_attribution = ATTRIBUTION
     _attr_has_entity_name = True
+    # Large list attributes stay live for the card but are kept out of recorder history
+    _unrecorded_attributes = frozenset({"game_events", "last_game_events", "recent_games"})
 
     def __init__(self, coordinator: HockeyCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator)
