@@ -76,5 +76,17 @@
         }
       }
     }
+  },
+  "services": {
+    "force_refresh": {
+      "name": "Force refresh",
+      "description": "Clears the schedule and logo cache, then immediately fetches fresh data for the selected Hockey Tracker sensors.",
+      "fields": {
+        "entity_id": {
+          "name": "Entity",
+          "description": "One or more Hockey Tracker sensors to refresh."
+        }
+      }
+    }
   }
 }

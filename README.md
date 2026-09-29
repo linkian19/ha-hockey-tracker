@@ -120,6 +120,8 @@ Alerts are deduplicated by game ID within each HA session. Win alerts include a 
 
 Clears the schedule and logo cache, then immediately fetches fresh data from the API. Unlike `homeassistant.update_entity`, this bypasses the 1-hour schedule cache so next-game info and logos are always re-fetched.
 
+Since v1.9.8 the service ships a `services.yaml`, so it appears in **Developer Tools → Actions** and the automation editor with a name, description and a Hockey Tracker sensor picker (and HA no longer logs `Failed to load services.yaml for integration: hockey_tracker`).
+
 ```yaml
 service: hockey_tracker.force_refresh
 data:

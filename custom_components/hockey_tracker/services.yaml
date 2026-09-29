@@ -1,0 +1,10 @@
+force_refresh:
+  fields:
+    entity_id:
+      required: true
+      example: sensor.coachella_valley_firebirds_game
+      selector:
+        entity:
+          integration: hockey_tracker
+          domain: sensor
+          multiple: true
