@@ -20,6 +20,12 @@ from .const import (
     CONF_LEAGUE,
     CONF_NOTIFY_GOAL_ENABLED,
     CONF_NOTIFY_GOAL_TARGETS,
+    CONF_NOTIFY_LEAD_ENABLED,
+    CONF_NOTIFY_LEAD_TARGETS,
+    CONF_NOTIFY_OPP_GOAL_ENABLED,
+    CONF_NOTIFY_OPP_GOAL_TARGETS,
+    CONF_NOTIFY_PERIOD_ENABLED,
+    CONF_NOTIFY_PERIOD_TARGETS,
     CONF_NOTIFY_PREGAME_ENABLED,
     CONF_NOTIFY_PREGAME_TARGETS,
     CONF_NOTIFY_WIN_ENABLED,
@@ -43,6 +49,7 @@ from .const import (
     NHL_GAME_URL,
     NHL_LIVE_STATES,
     NHL_PRE_STATES,
+    NOTIFY_ENABLED_DEFAULTS,
     PWHL_GAME_URL,
     RECENT_GAMES_MAX,
     SCAN_INTERVAL_FINAL,
@@ -56,6 +63,56 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _to_int(val: Any) -> int | None:
+    """Coerce an API score value (HockeyTech returns strings) to int."""
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        return None
+
+
+def reconcile_scores(data: dict, by_abbrev: bool = False) -> dict:
+    """Never report fewer goals than the goal events show.
+
+    The score and the goal list come from different API feeds (HockeyTech
+    scorebar vs gameSummary; NHL scoreboard vs landing) that update at
+    different times. When the event feed is ahead, a goal alert would go out
+    with the previous score, so take the higher of the two per team.
+
+    Goals are attributed via is_tracked_team relative to is_home, or with
+    by_abbrev=True via team_abbrev against home/away_team_abbrev (playoff
+    tracker, where both teams can be followed). If the abbreviations don't
+    account for every goal the scores are left untouched.
+    """
+    goals = [e for e in data.get("game_events") or [] if e.get("type") == "goal"]
+    if not goals:
+        return data
+    if by_abbrev:
+        home_abbrev, away_abbrev = data.get("home_team_abbrev"), data.get("away_team_abbrev")
+        home_count = sum(1 for e in goals if home_abbrev and e.get("team_abbrev") == home_abbrev)
+        away_count = sum(1 for e in goals if away_abbrev and e.get("team_abbrev") == away_abbrev)
+        if home_count + away_count != len(goals):
+            return data
+    else:
+        ours = sum(1 for e in goals if e.get("is_tracked_team"))
+        home_count, away_count = (ours, len(goals) - ours) if data.get("is_home") else (len(goals) - ours, ours)
+    for key, counted in (("home_score", home_count), ("away_score", away_count)):
+        reported = _to_int(data.get(key)) or 0
+        if counted > reported:
+            _LOGGER.debug(
+                "Score feed behind goal events for game %s: %s %s -> %s",
+                data.get("game_id"), key, reported, counted,
+            )
+            data[key] = counted
+    return data
+
+
+def _period_label(period: int) -> str:
+    if period <= 3:
+        return {1: "1st", 2: "2nd", 3: "3rd"}.get(period, f"P{period}")
+    return "OT" if period == 4 else f"{period - 3}OT"
 
 
 def _event_sort_key(e: dict) -> tuple:
@@ -88,8 +145,13 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Notification state — prevents duplicate alerts for the same event.
         self._notif_pregame_sent_id: str | None = None
         self._notif_win_sent_id: str | None = None
+        # In-game notification state, baselined the first time each game is seen so
+        # an HA restart or integration reload mid-game doesn't replay earlier events.
+        self._notif_game_id: str | None = None
         self._notif_goal_count: int = 0
-        self._notif_goal_game_id: str | None = None
+        self._notif_opp_goal_count: int = 0
+        self._notif_lead: str | None = None  # "us" | "them" | "tied"
+        self._notif_period_sent: int = 0
 
         if self.league in HOCKEYTECH_LEAGUES:
             self.api_key: str = entry.data[CONF_API_KEY]
@@ -440,20 +502,21 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             away_shots = summary.get("visitingTeam", {}).get("stats", {}).get("shots")
 
         game_id = game.get("GameID") or game.get("ID")
-        return {
+        result = {
             "game_state": game_state,
             "game_id": game_id,
             "start_time": game.get("GameDateISO8601"),
             "period": game.get("Period"),
             "clock": game.get("GameClock"),
+            "in_intermission": str(game.get("Intermission", "")) == "1",
             "home_team": f"{game.get('HomeCity','')} {game.get('HomeNickname','')}".strip(),
             "home_team_id": home_id,
-            "home_score": game.get("HomeGoals", 0),
+            "home_score": _to_int(game.get("HomeGoals")) or 0,
             "home_shots": home_shots,
             "home_logo_url": self._upscale_ht_logo(game.get("HomeLogo")) or self._logo_cache.get(home_id),
             "away_team": f"{game.get('VisitorCity','')} {game.get('VisitorNickname','')}".strip(),
             "away_team_id": away_id,
-            "away_score": game.get("VisitorGoals", 0),
+            "away_score": _to_int(game.get("VisitorGoals")) or 0,
             "away_shots": away_shots,
             "away_logo_url": self._upscale_ht_logo(game.get("VisitorLogo")) or self._logo_cache.get(away_id),
             "is_home": is_home,
@@ -462,6 +525,7 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "game_url": self._ht_game_url(game, str(game_id)) if game_id else None,
             "game_events": self._ht_extract_events(summary) if summary else [],
         }
+        return reconcile_scores(result)
 
     def _ht_normalize_recent(self, game: dict) -> dict[str, Any]:
         is_home = str(game.get("HomeID")) == self.team_id
@@ -800,12 +864,13 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             home_sog = home.get("sog")
 
         game_id = game.get("id")
-        return {
+        result = {
             "game_state": game_state,
             "game_id": game_id,
             "start_time": game.get("startTimeUTC"),
             "period": period,
             "clock": clock,
+            "in_intermission": bool(clock_data.get("inIntermission")),
             "home_team": self._nhl_full_name(home),
             "home_team_id": home.get("abbrev"),
             "home_score": home.get("score", 0),
@@ -822,6 +887,7 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "game_url": NHL_GAME_URL.format(game_id=game_id) if game_id else None,
             "game_events": self._nhl_extract_events(landing, playbyplay) if landing else [],
         }
+        return reconcile_scores(result)
 
     async def _fetch_nhl_landing(self, game_id: int) -> dict | None:
         """Fetch NHL gamecenter landing page — provides SOG and scoring/penalty events."""
@@ -1002,7 +1068,7 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return []
 
     async def _maybe_notify(self, data: dict) -> None:
-        """Fire HA notify services for win, pre-game, and goal events."""
+        """Fire HA notify services for pre-game, goal, lead, period, and final-score events."""
         opts = self._notif_opts()
         state = data.get("game_state")
         game_id = str(data.get("game_id") or "")
@@ -1026,66 +1092,143 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 except (ValueError, TypeError):
                     pass
 
-        # Goal notification: fire for each new tracked-team goal during live play
-        if opts.get(CONF_NOTIFY_GOAL_ENABLED) and state == GAME_STATE_LIVE and game_id:
-            targets = self._parse_targets(opts.get(CONF_NOTIFY_GOAL_TARGETS, []))
-            if targets:
-                if game_id != self._notif_goal_game_id:
-                    self._notif_goal_game_id = game_id
-                    self._notif_goal_count = 0
-                our_goals = [
-                    e for e in data.get("game_events", [])
-                    if e.get("type") == "goal" and e.get("is_tracked_team")
-                ]
-                if len(our_goals) > self._notif_goal_count:
-                    # New goals are at the front of the newest-first sorted list
-                    new_goals = our_goals[:len(our_goals) - self._notif_goal_count]
-                    for goal in new_goals:
-                        scorer = goal.get("player_name", "")
-                        period = goal.get("period", "")
-                        time_str = goal.get("time", "")
-                        tag = (
-                            " (PP)" if goal.get("is_power_play")
-                            else " (SH)" if goal.get("is_short_handed")
-                            else " (EN)" if goal.get("is_empty_net")
-                            else ""
-                        )
-                        score_str = f"{our_score}–{opp_score}" if our_score is not None else ""
-                        msg = f"{scorer}{tag} — P{period} {time_str}" + (f" | {score_str}" if score_str else "")
-                        await self._send_notifications(targets, f"GOAL! {our_team} scores!", msg)
-                    self._notif_goal_count = len(our_goals)
+        if state not in (GAME_STATE_PRE, GAME_STATE_LIVE, GAME_STATE_FINAL) or not game_id:
+            return
 
-        # Win notification: fire once when FINAL and tracked team won.
+        def _enabled(key_enabled: str, key_targets: str) -> list[str]:
+            if not opts.get(key_enabled, NOTIFY_ENABLED_DEFAULTS[key_enabled]):
+                return []
+            return self._parse_targets(opts.get(key_targets, []))
+
+        events = data.get("game_events", [])
+        our_goals = [e for e in events if e.get("type") == "goal" and e.get("is_tracked_team")]
+        opp_goals = [e for e in events if e.get("type") == "goal" and not e.get("is_tracked_team")]
+        our_score = _to_int(our_score)
+        opp_score = _to_int(opp_score)
+        lead = None
+        if our_score is not None and opp_score is not None:
+            lead = "us" if our_score > opp_score else "them" if opp_score > our_score else "tied"
+        period = _to_int(data.get("period")) or 0
+        in_intermission = bool(data.get("in_intermission"))
+        score_line = f"{our_team} {our_score}, {opp_team} {opp_score}" if lead else ""
+        # Period updates and the final score share a tag so mobile devices show one
+        # running scoreboard notification per game instead of a stack.
+        score_tag = {"tag": f"hockey_tracker_{self.team_id}_{game_id}_score"}
+
+        if game_id != self._notif_game_id:
+            # First time this game is seen (normally while PRE; otherwise after an HA
+            # restart or reload mid-game): record what has already happened without
+            # announcing it.
+            self._notif_game_id = game_id
+            self._notif_goal_count = len(our_goals)
+            self._notif_opp_goal_count = len(opp_goals)
+            self._notif_lead = lead
+            self._notif_period_sent = period if in_intermission else max(period - 1, 0)
+            if state == GAME_STATE_FINAL:
+                self._notif_win_sent_id = game_id
+            if state != GAME_STATE_PRE:
+                return
+
+        if state == GAME_STATE_LIVE:
+            # Goal notification: one per new tracked-team goal
+            if len(our_goals) > self._notif_goal_count:
+                targets = _enabled(CONF_NOTIFY_GOAL_ENABLED, CONF_NOTIFY_GOAL_TARGETS)
+                # New goals are at the front of the newest-first sorted list
+                for goal in our_goals[:len(our_goals) - self._notif_goal_count] if targets else []:
+                    msg = self._goal_line(goal) + (f" | {our_score}–{opp_score}" if lead else "")
+                    await self._send_notifications(targets, f"GOAL! {our_team} scores!", msg)
+            # Always resync so a goal removed on review doesn't swallow the next one
+            self._notif_goal_count = len(our_goals)
+
+            # Opponent goal notification: one per new opponent goal
+            if len(opp_goals) > self._notif_opp_goal_count:
+                targets = _enabled(CONF_NOTIFY_OPP_GOAL_ENABLED, CONF_NOTIFY_OPP_GOAL_TARGETS)
+                for goal in opp_goals[:len(opp_goals) - self._notif_opp_goal_count] if targets else []:
+                    msg = self._goal_line(goal) + (f" | {our_score}–{opp_score}" if lead else "")
+                    await self._send_notifications(targets, f"{opp_team} scores", msg)
+            self._notif_opp_goal_count = len(opp_goals)
+
+            # Lead change / tie notification
+            if lead is not None and lead != self._notif_lead:
+                targets = _enabled(CONF_NOTIFY_LEAD_ENABLED, CONF_NOTIFY_LEAD_TARGETS)
+                if targets and self._notif_lead is not None:
+                    title = {
+                        "us": f"{our_team} take the lead",
+                        "them": f"{opp_team} take the lead",
+                        "tied": "Tie game",
+                    }[lead]
+                    await self._send_notifications(targets, title, f"{score_line} — {_period_label(period)}")
+                self._notif_lead = lead
+
+            # End-of-period notification: sent once when an intermission starts.
+            # Shootouts have no following intermission, so they never trigger this.
+            if in_intermission and period > self._notif_period_sent:
+                targets = _enabled(CONF_NOTIFY_PERIOD_ENABLED, CONF_NOTIFY_PERIOD_TARGETS)
+                if targets and score_line:
+                    msg = score_line
+                    our_shots = data.get("home_shots") if is_home else data.get("away_shots")
+                    opp_shots = data.get("away_shots") if is_home else data.get("home_shots")
+                    if our_shots is not None and opp_shots is not None:
+                        msg += f" · Shots {our_shots}–{opp_shots}"
+                    label = "regulation" if period == 3 else _period_label(period)
+                    await self._send_notifications(
+                        targets, f"Hockey: End of {label}", msg, data=score_tag
+                    )
+                self._notif_period_sent = period
+
+        # Final score notification: fire once per game, win or lose.
         # Require game to have started within 12 hours so a stale FINAL game
         # doesn't re-trigger after an integration reload (which resets _notif_win_sent_id).
-        if opts.get(CONF_NOTIFY_WIN_ENABLED) and game_id and game_id != self._notif_win_sent_id:
-            targets = self._parse_targets(opts.get(CONF_NOTIFY_WIN_TARGETS, []))
-            if targets and state == GAME_STATE_FINAL:
-                game_is_recent = False
-                start_time = data.get("start_time")
-                if start_time:
-                    try:
-                        start = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
-                        game_is_recent = (datetime.now(timezone.utc) - start).total_seconds() < 43200
-                    except (ValueError, TypeError):
-                        pass
-                if game_is_recent and our_score is not None and opp_score is not None and our_score > opp_score:
-                    msg = f"Final: {our_team} {our_score}, {opp_team} {opp_score}. {our_team} wins!"
-                    await self._send_notifications(targets, f"{our_team} Wins!", msg)
-                    self._notif_win_sent_id = game_id
+        if state == GAME_STATE_FINAL and game_id != self._notif_win_sent_id and lead is not None:
+            targets = _enabled(CONF_NOTIFY_WIN_ENABLED, CONF_NOTIFY_WIN_TARGETS)
+            game_is_recent = False
+            start_time = data.get("start_time")
+            if start_time:
+                try:
+                    start = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
+                    game_is_recent = (datetime.now(timezone.utc) - start).total_seconds() < 43200
+                except (ValueError, TypeError):
+                    pass
+            if targets and game_is_recent:
+                if lead == "us":
+                    title, msg = f"{our_team} Win!", f"Final: {score_line}. {our_team} wins!"
+                else:
+                    title, msg = f"Final: {our_team} {our_score}–{opp_score}", f"Final: {score_line}."
+                await self._send_notifications(targets, title, msg, data=score_tag)
+            self._notif_win_sent_id = game_id
 
-    async def _send_notifications(self, targets: list[str], title: str, message: str) -> None:
+    @staticmethod
+    def _goal_line(goal: dict) -> str:
+        tag = (
+            " (PP)" if goal.get("is_power_play")
+            else " (SH)" if goal.get("is_short_handed")
+            else " (EN)" if goal.get("is_empty_net")
+            else ""
+        )
+        return f"{goal.get('player_name', '')}{tag} — P{goal.get('period', '')} {goal.get('time', '')}"
+
+    async def _send_notifications(
+        self, targets: list[str], title: str, message: str, data: dict | None = None
+    ) -> None:
         for target in targets:
+            parts = target.rsplit(".", 1)
+            domain = parts[0] if len(parts) == 2 else "notify"
+            service_name = parts[1] if len(parts) == 2 else parts[0]
+            payload = {"title": title, "message": message}
             try:
-                parts = target.rsplit(".", 1)
-                domain = parts[0] if len(parts) == 2 else "notify"
-                service_name = parts[1] if len(parts) == 2 else parts[0]
                 await self.hass.services.async_call(
                     domain, service_name,
-                    {"title": title, "message": message},
+                    {**payload, "data": data} if data else payload,
                     blocking=False,
                 )
             except Exception as err:
+                if data:
+                    # Some notify services reject a data payload; resend without it.
+                    try:
+                        await self.hass.services.async_call(domain, service_name, payload, blocking=False)
+                        continue
+                    except Exception as retry_err:
+                        err = retry_err
                 _LOGGER.warning("Failed to send notification to %s: %s", target, err)
 
     # ------------------------------------------------------------------

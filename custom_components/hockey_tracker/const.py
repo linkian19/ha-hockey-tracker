@@ -125,12 +125,30 @@ ROUND_DATE_WINDOW = 5
 NHL_PLAYOFF_BRACKET_URL = "{base}/playoff-bracket/{year}"
 
 # Notification option config keys
+# notify_win_* keeps its original key for backward compatibility, but now covers
+# the final score of every game (win or loss).
 CONF_NOTIFY_WIN_ENABLED = "notify_win_enabled"
 CONF_NOTIFY_WIN_TARGETS = "notify_win_targets"
 CONF_NOTIFY_PREGAME_ENABLED = "notify_pregame_enabled"
 CONF_NOTIFY_PREGAME_TARGETS = "notify_pregame_targets"
 CONF_NOTIFY_GOAL_ENABLED = "notify_goal_enabled"
 CONF_NOTIFY_GOAL_TARGETS = "notify_goal_targets"
+CONF_NOTIFY_OPP_GOAL_ENABLED = "notify_opp_goal_enabled"
+CONF_NOTIFY_OPP_GOAL_TARGETS = "notify_opp_goal_targets"
+CONF_NOTIFY_LEAD_ENABLED = "notify_lead_enabled"
+CONF_NOTIFY_LEAD_TARGETS = "notify_lead_targets"
+CONF_NOTIFY_PERIOD_ENABLED = "notify_period_enabled"
+CONF_NOTIFY_PERIOD_TARGETS = "notify_period_targets"
+
+# Defaults for the enable toggles (a type still needs targets before it sends anything)
+NOTIFY_ENABLED_DEFAULTS = {
+    CONF_NOTIFY_WIN_ENABLED: True,
+    CONF_NOTIFY_PREGAME_ENABLED: False,
+    CONF_NOTIFY_GOAL_ENABLED: False,
+    CONF_NOTIFY_OPP_GOAL_ENABLED: False,
+    CONF_NOTIFY_LEAD_ENABLED: False,
+    CONF_NOTIFY_PERIOD_ENABLED: True,
+}
 
 # Polling intervals (seconds)
 SCAN_INTERVAL_LIVE = 30

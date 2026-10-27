@@ -14,6 +14,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
+from .coordinator import _to_int, reconcile_scores
 from .const import (
     CONF_API_KEY,
     CONF_FOLLOWED_TEAMS,
@@ -37,6 +38,7 @@ from .const import (
     NHL_FINAL_STATES,
     NHL_LIVE_STATES,
     NHL_PRE_STATES,
+    NOTIFY_ENABLED_DEFAULTS,
     SCAN_INTERVAL_FINAL,
     SCAN_INTERVAL_GAME_ENDING,
     SCAN_INTERVAL_GAME_SOON,
@@ -430,7 +432,7 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         away_city = away.get("placeName", {}).get("default", "")
         away_name = away.get("commonName", {}).get("default", away_abbrev)
 
-        return {
+        result = {
             "game_state": game_state,
             "game_id": game.get("id"),
             "start_time": game.get("startTimeUTC"),
@@ -438,11 +440,13 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "clock": clock,
             "home_team": f"{home_city} {home_name}".strip(),
             "home_team_id": home_abbrev,
+            "home_team_abbrev": home_abbrev,
             "home_score": home.get("score", 0),
             "home_shots": home_sog,
             "home_logo_url": self._nhl_logo(home_abbrev, home.get("logo")),
             "away_team": f"{away_city} {away_name}".strip(),
             "away_team_id": away_abbrev,
+            "away_team_abbrev": away_abbrev,
             "away_score": away.get("score", 0),
             "away_shots": away_sog,
             "away_logo_url": self._nhl_logo(away_abbrev, away.get("logo")),
@@ -451,6 +455,7 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "venue": game.get("venue", {}).get("default"),
             "game_events": self._nhl_extract_events(landing, playbyplay) if landing else [],
         }
+        return reconcile_scores(result, by_abbrev=True)
 
     async def _get_nhl_schedule_cached(self) -> list[dict]:
         now = datetime.now(timezone.utc)
@@ -940,7 +945,7 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             home_shots = summary.get("homeTeam", {}).get("stats", {}).get("shots")
             away_shots = summary.get("visitingTeam", {}).get("stats", {}).get("shots")
 
-        return {
+        result = {
             "game_state": game_state,
             "game_id": game.get("GameID") or game.get("ID"),
             "start_time": game.get("GameDateISO8601"),
@@ -949,13 +954,13 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "home_team": f"{game.get('HomeCity','')} {game.get('HomeNickname','')}".strip(),
             "home_team_id": home_id,
             "home_team_abbrev": game.get("HomeCode", game.get("home_team_code", "")),
-            "home_score": game.get("HomeGoals", 0),
+            "home_score": _to_int(game.get("HomeGoals")) or 0,
             "home_shots": home_shots,
             "home_logo_url": self._upscale_ht_logo(game.get("HomeLogo")) or self._logo_cache.get(home_id),
             "away_team": f"{game.get('VisitorCity','')} {game.get('VisitorNickname','')}".strip(),
             "away_team_id": vis_id,
             "away_team_abbrev": game.get("VisitorCode", game.get("visiting_team_code", "")),
-            "away_score": game.get("VisitorGoals", 0),
+            "away_score": _to_int(game.get("VisitorGoals")) or 0,
             "away_shots": away_shots,
             "away_logo_url": self._upscale_ht_logo(game.get("VisitorLogo")) or self._logo_cache.get(vis_id),
             "is_home": is_home,
@@ -963,6 +968,7 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "venue": game.get("venue_name"),
             "game_events": self._ht_extract_events(summary) if summary else [],
         }
+        return reconcile_scores(result, by_abbrev=True)
 
     def _ht_first_upcoming_followed(self, schedule: list[dict]) -> dict | None:
         now = datetime.now(timezone.utc)
@@ -1265,27 +1271,39 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         await self._send_notifications(targets, f"GOAL! {scoring_team} scores!", msg)
                     self._notif_goal_count[our_id] = len(our_goals)
 
-        # Win — identify the actual winning followed team (handles both-teams-followed case)
-        if opts.get(CONF_NOTIFY_WIN_ENABLED) and game_id and state == GAME_STATE_FINAL:
+        # Final score — win or lose. Prefer the winning followed team (handles the
+        # both-teams-followed case); otherwise report the loss for the followed team.
+        if opts.get(CONF_NOTIFY_WIN_ENABLED, NOTIFY_ENABLED_DEFAULTS[CONF_NOTIFY_WIN_ENABLED]) and game_id and state == GAME_STATE_FINAL:
             targets = self._parse_targets(opts.get(CONF_NOTIFY_WIN_TARGETS, []))
             if targets:
                 home_id_str = str(data.get("home_team_id") or "")
                 away_id_str = str(data.get("away_team_id") or "")
-                home_scr = data.get("home_score") or 0
-                away_scr = data.get("away_score") or 0
+                home_scr = _to_int(data.get("home_score")) or 0
+                away_scr = _to_int(data.get("away_score")) or 0
                 home_name = data.get("home_team", "")
                 away_name = data.get("away_team", "")
 
-                if home_scr > away_scr and home_id_str in self.followed_team_ids:
+                if home_scr > away_scr:
                     winner_id, winner_name, winner_scr = home_id_str, home_name, home_scr
-                    loser_name, loser_scr = away_name, away_scr
-                elif away_scr > home_scr and away_id_str in self.followed_team_ids:
-                    winner_id, winner_name, winner_scr = away_id_str, away_name, away_scr
-                    loser_name, loser_scr = home_name, home_scr
+                    loser_id, loser_name, loser_scr = away_id_str, away_name, away_scr
                 else:
-                    winner_id = None
+                    winner_id, winner_name, winner_scr = away_id_str, away_name, away_scr
+                    loser_id, loser_name, loser_scr = home_id_str, home_name, home_scr
 
-                if winner_id and self._notif_win_sent.get(winner_id) != game_id:
+                if home_scr == away_scr:
+                    notify_id = None
+                elif winner_id in self.followed_team_ids:
+                    notify_id = winner_id
+                    title = f"{winner_name} Wins!"
+                    msg = f"Final: {winner_name} {winner_scr}, {loser_name} {loser_scr}. {winner_name} wins!"
+                elif loser_id in self.followed_team_ids:
+                    notify_id = loser_id
+                    title = f"Final: {loser_name} {loser_scr}–{winner_scr}"
+                    msg = f"Final: {winner_name} {winner_scr}, {loser_name} {loser_scr}."
+                else:
+                    notify_id = None
+
+                if notify_id and self._notif_win_sent.get(notify_id) != game_id:
                     start_time = data.get("start_time")
                     recent = False
                     if start_time:
@@ -1295,12 +1313,8 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         except (ValueError, TypeError):
                             pass
                     if recent:
-                        await self._send_notifications(
-                            targets,
-                            f"{winner_name} Wins!",
-                            f"Final: {winner_name} {winner_scr}, {loser_name} {loser_scr}. {winner_name} wins!",
-                        )
-                        self._notif_win_sent[winner_id] = game_id
+                        await self._send_notifications(targets, title, msg)
+                        self._notif_win_sent[notify_id] = game_id
 
     async def _send_notifications(self, targets: list[str], title: str, message: str) -> None:
         for target in targets:

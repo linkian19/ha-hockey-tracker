@@ -57,22 +57,34 @@
     "step": {
       "init": {
         "title": "Hockey Tracker — Notifications",
-        "description": "Configure push notifications for game events. Enable a type with the toggle, then select one or more notification targets.",
+        "description": "Configure push notifications for game events. Enable a type with the toggle, then select one or more notification targets. A type sends nothing until it has at least one target.",
         "data": {
-          "notify_win_enabled": "Win Notifications",
-          "notify_win_targets": "Win Notification Targets",
           "notify_pregame_enabled": "Pre-Game Notifications",
           "notify_pregame_targets": "Pre-Game Notification Targets",
           "notify_goal_enabled": "Goal Notifications",
-          "notify_goal_targets": "Goal Notification Targets"
+          "notify_goal_targets": "Goal Notification Targets",
+          "notify_opp_goal_enabled": "Opponent Goal Notifications",
+          "notify_opp_goal_targets": "Opponent Goal Notification Targets",
+          "notify_lead_enabled": "Lead Change / Tie Notifications",
+          "notify_lead_targets": "Lead Change / Tie Notification Targets",
+          "notify_period_enabled": "End of Period Notifications",
+          "notify_period_targets": "End of Period Notification Targets",
+          "notify_win_enabled": "Final Score Notifications",
+          "notify_win_targets": "Final Score Notification Targets"
         },
         "data_description": {
-          "notify_win_enabled": "Send an alert when the tracked team wins a game.",
-          "notify_win_targets": "Which notify services receive the win alert.",
           "notify_pregame_enabled": "Send a reminder approximately 30 minutes before puck drop.",
           "notify_pregame_targets": "Which notify services receive the pre-game reminder.",
           "notify_goal_enabled": "Send an alert each time the tracked team scores a goal.",
-          "notify_goal_targets": "Which notify services receive the goal alert."
+          "notify_goal_targets": "Which notify services receive the goal alert.",
+          "notify_opp_goal_enabled": "Send an alert each time the opponent scores a goal.",
+          "notify_opp_goal_targets": "Which notify services receive the opponent goal alert.",
+          "notify_lead_enabled": "Send an alert when either team takes the lead or the game becomes tied.",
+          "notify_lead_targets": "Which notify services receive the lead change / tie alert.",
+          "notify_period_enabled": "Send the score and shots at the end of each period. Each update replaces the previous one for the same game on mobile devices.",
+          "notify_period_targets": "Which notify services receive the end-of-period update.",
+          "notify_win_enabled": "Send the final score when a game ends, win or lose. Replaces the last end-of-period update for that game on mobile devices.",
+          "notify_win_targets": "Which notify services receive the final score."
         }
       }
     }

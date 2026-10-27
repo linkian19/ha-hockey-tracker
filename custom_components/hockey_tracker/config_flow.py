@@ -24,6 +24,12 @@ from .const import (
     CONF_LEAGUE,
     CONF_NOTIFY_GOAL_ENABLED,
     CONF_NOTIFY_GOAL_TARGETS,
+    CONF_NOTIFY_LEAD_ENABLED,
+    CONF_NOTIFY_LEAD_TARGETS,
+    CONF_NOTIFY_OPP_GOAL_ENABLED,
+    CONF_NOTIFY_OPP_GOAL_TARGETS,
+    CONF_NOTIFY_PERIOD_ENABLED,
+    CONF_NOTIFY_PERIOD_TARGETS,
     CONF_NOTIFY_PREGAME_ENABLED,
     CONF_NOTIFY_PREGAME_TARGETS,
     CONF_NOTIFY_WIN_ENABLED,
@@ -51,6 +57,7 @@ from .const import (
     LEAGUE_USHL,
     LEAGUE_WHL,
     NHL_API_BASE,
+    NOTIFY_ENABLED_DEFAULTS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -65,6 +72,7 @@ LEAGUE_OPTIONS = [
     LEAGUE_CHL,
     LEAGUE_OHL,
     LEAGUE_WHL,
+    NOTIFY_ENABLED_DEFAULTS,
     LEAGUE_QMJHL,
     LEAGUE_USHL,
     LEAGUE_BCHL,
@@ -364,13 +372,26 @@ class HockeyTrackerOptionsFlow(OptionsFlow):
                 options=notify_options, multiple=True, mode=SelectSelectorMode.DROPDOWN
             ))
 
-        schema = vol.Schema({
-            vol.Optional(CONF_NOTIFY_WIN_ENABLED, default=opts.get(CONF_NOTIFY_WIN_ENABLED, False)): BooleanSelector(),
-            vol.Optional(CONF_NOTIFY_WIN_TARGETS, default=_targets_default(CONF_NOTIFY_WIN_TARGETS)): _target_sel(),
-            vol.Optional(CONF_NOTIFY_PREGAME_ENABLED, default=opts.get(CONF_NOTIFY_PREGAME_ENABLED, False)): BooleanSelector(),
-            vol.Optional(CONF_NOTIFY_PREGAME_TARGETS, default=_targets_default(CONF_NOTIFY_PREGAME_TARGETS)): _target_sel(),
-            vol.Optional(CONF_NOTIFY_GOAL_ENABLED, default=opts.get(CONF_NOTIFY_GOAL_ENABLED, False)): BooleanSelector(),
-            vol.Optional(CONF_NOTIFY_GOAL_TARGETS, default=_targets_default(CONF_NOTIFY_GOAL_TARGETS)): _target_sel(),
-        })
+        # Each notification type is an enable toggle followed by its targets.
+        # Opponent goal, lead change and end-of-period alerts are Team Tracker only.
+        is_playoff = self._entry.data.get(CONF_ENTRY_TYPE) == ENTRY_TYPE_PLAYOFF
+        notify_types = [
+            (CONF_NOTIFY_PREGAME_ENABLED, CONF_NOTIFY_PREGAME_TARGETS),
+            (CONF_NOTIFY_GOAL_ENABLED, CONF_NOTIFY_GOAL_TARGETS),
+        ]
+        if not is_playoff:
+            notify_types += [
+                (CONF_NOTIFY_OPP_GOAL_ENABLED, CONF_NOTIFY_OPP_GOAL_TARGETS),
+                (CONF_NOTIFY_LEAD_ENABLED, CONF_NOTIFY_LEAD_TARGETS),
+                (CONF_NOTIFY_PERIOD_ENABLED, CONF_NOTIFY_PERIOD_TARGETS),
+            ]
+        notify_types.append((CONF_NOTIFY_WIN_ENABLED, CONF_NOTIFY_WIN_TARGETS))
+
+        fields: dict = {}
+        for enabled_key, targets_key in notify_types:
+            enabled_default = opts.get(enabled_key, NOTIFY_ENABLED_DEFAULTS[enabled_key])
+            fields[vol.Optional(enabled_key, default=enabled_default)] = BooleanSelector()
+            fields[vol.Optional(targets_key, default=_targets_default(targets_key))] = _target_sel()
+        schema = vol.Schema(fields)
 
         return self.async_show_form(step_id="init", data_schema=schema)

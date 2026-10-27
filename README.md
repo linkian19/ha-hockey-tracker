@@ -28,7 +28,7 @@ A [Home Assistant](https://www.home-assistant.io/) custom integration that track
 - Adaptive polling — 15 s at end of regulation, 30 s during live games, up to 2 h when no game is near
 - 2-hour post-game FINAL window — final score stays visible well after the buzzer
 - `last_fetched` attribute — always know how fresh the data is
-- Built-in notifications — win, pre-game, and goal alerts via any HA notify service
+- Built-in notifications — pre-game, goal, opponent goal, lead change / tie, end-of-period, and final-score alerts via any HA notify service
 - `hockey_tracker.force_refresh` service — clears cache and hard-pulls fresh data on demand
 
 ### Playoff Tracker
@@ -36,7 +36,7 @@ A [Home Assistant](https://www.home-assistant.io/) custom integration that track
 - Follow up to 4 teams — their series are highlighted in the bracket view
 - Live game data for any followed team during playoff games (scores, period, clock, shots, events)
 - Bracket data clustered into rounds — NHL uses explicit round data from the API; other leagues use a team-conflict algorithm (a team can only appear in one series per round, so East and West conference series are never collapsed into the wrong round)
-- Per-team notifications — win, pre-game, and goal alerts for any followed team
+- Per-team notifications — pre-game, goal, and final-score alerts for any followed team
 - Adaptive polling identical to the Team Tracker — fast during live games, slow when idle
 
 ---
@@ -100,17 +100,26 @@ One sensor is created per Playoff Tracker entry, regardless of how many teams yo
 
 After setup, configure alerts at **Settings → Devices & Services → Hockey Tracker → Configure**.
 
-| Notification | When it fires |
-|--------------|---------------|
-| **Win** | Once when the tracked team's game ends in a win — includes final score |
-| **Pre-game** | Once per game when puck drop is 35 minutes or fewer away |
-| **Goal** | Each time the tracked team scores during live play — includes scorer, strength (PP/SH/EN), period/time, and current score |
+| Notification | Default | When it fires |
+|--------------|---------|---------------|
+| **Pre-game** | Off | Once per game when puck drop is 35 minutes or fewer away |
+| **Goal** | Off | Each time the tracked team scores during live play — includes scorer, strength (PP/SH/EN), period/time, and current score |
+| **Opponent goal** | Off | Each time the opponent scores during live play — same detail as the goal alert *(Team Tracker only)* |
+| **Lead change / tie** | Off | When either team takes the lead or the game becomes tied — e.g. "Wichita Thunder take the lead", "Tie game" *(Team Tracker only)* |
+| **End of period** | **On** | Once at the start of each intermission — score and shots, e.g. "End of 2nd: Mavericks 1, Thunder 2 · Shots 18–22". The 3rd-period update is labelled "End of regulation" *(Team Tracker only)* |
+| **Final score** | **On** | Once when the game ends, **win or lose** — "Mavericks Win!" or "Final: Mavericks 2–3" |
 
-Each type has an independent enable toggle and a multi-select list of your configured HA notify services (mobile apps, persistent notification, etc.). Select as many targets as you like per type.
+Each type has an independent enable toggle and a multi-select list of your configured HA notify services (mobile apps, persistent notification, etc.). Select as many targets as you like per type. **A type sends nothing until it has at least one target**, so the "On" defaults only take effect once you pick targets.
 
-Alerts are deduplicated by game ID within each HA session. Win alerts include a 12-hour recency guard so a stale FINAL game does not re-trigger after an integration reload. HockeyTech LIVE games use a 4-hour recency guard so a completed game that the API briefly re-reports as active does not re-trigger goal or win alerts. If the integration is reloaded during an active game, goal alerts will replay for goals already scored.
+The final-score toggle keeps its original option key (`notify_win_enabled` / `notify_win_targets`), so existing win-notification settings carry over and now also cover losses.
 
-**Playoff Tracker** — notifications apply per followed team. If two followed teams are playing simultaneously, the coordinator picks the most relevant single game (LIVE priority over FINAL over PRE) to drive notification state. The same win/pre-game/goal logic applies; alerts are keyed per team ID so each followed team's goals and wins fire independently.
+End-of-period and final-score alerts share a notification `tag` per game, so on the HA Companion app each update **replaces** the previous one — you get a single running scoreboard notification instead of a stack. Notify services that don't accept a `data` payload are retried without the tag.
+
+**Score accuracy.** The score and the goal list come from different API feeds (HockeyTech scorebar vs. game summary; NHL scoreboard vs. landing) that don't always update together. Since v1.10.0 the integration never reports fewer goals than the goal events show, so a goal alert can no longer go out with the previous score (e.g. "1–0" after the second goal), and the card updates at the same time as the alert.
+
+Alerts are deduplicated by game ID within each HA session. The first time a game is seen (normally while it is still PRE) the integration records what has already happened, so an HA restart or integration reload mid-game no longer replays earlier goals, lead changes or period updates, and a restart after the final buzzer does not resend the final score. Final-score alerts also keep the 12-hour recency guard. HockeyTech LIVE games use a 4-hour recency guard so a completed game that the API briefly re-reports as active does not re-trigger goal or final alerts.
+
+**Playoff Tracker** — notifications apply per followed team. If two followed teams are playing simultaneously, the coordinator picks the most relevant single game (LIVE priority over FINAL over PRE) to drive notification state. The same pre-game/goal/final-score logic applies; alerts are keyed per team ID so each followed team's goals and results fire independently. The final-score alert names the winning followed team when there is one, otherwise it reports the followed team's loss. Opponent goal, lead change and end-of-period alerts are not offered for Playoff Tracker entries. The score-accuracy fix applies to the Playoff Tracker as well (goals are matched to teams by abbreviation, since both teams may be followed).
 
 ---
 
@@ -371,8 +380,14 @@ The 5-minute interval after a scheduled start time covers a brief scoreboard lag
 **Notification settings show raw key names like `notify_win_enabled`**
 Home Assistant loads custom integration translations at startup, not at reload time. After installing or updating via HACS, a full HA restart is required — go to **Settings → System → Restart**. A simple integration reload is not sufficient.
 
-**Win notification fired for an old game after updating**
-Updating via HACS reloads the integration and resets in-memory notification state. The win notification includes a 12-hour recency guard to prevent this. Upgrade to v1.3.8 or later.
+**Win/final notification fired for an old game after updating**
+Updating via HACS reloads the integration and resets in-memory notification state. The final-score notification includes a 12-hour recency guard (v1.3.8+), and since v1.10.0 a game first seen already FINAL is never announced.
+
+**Goal alerts replayed after a restart or reload during a game**
+Fixed in v1.10.0 — in-game alert state is baselined the first time a game is seen.
+
+**Goal alert showed the old score**
+Fixed in v1.10.0 — see *Score accuracy* under [Notifications](#notifications).
 
 **Goal/Live notifications fired for a game that already ended**
 The HockeyTech API occasionally returns a completed game with a non-final status code hours after it ended, causing the integration to briefly re-enter LIVE state. LIVE game detection uses an 8-hour recency cutoff so stale API data for completed games is ignored.
