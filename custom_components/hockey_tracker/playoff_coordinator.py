@@ -255,6 +255,7 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if pre_game:
                 game_data = self._nhl_normalize_game(pre_game)
 
+        self._sync_bracket_live_score(bracket, game_data)
         return {
             **game_data,
             "bracket": bracket,
@@ -309,6 +310,28 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
 
         return sorted(rounds.values(), key=lambda r: r["round_number"])
+
+    @staticmethod
+    def _sync_bracket_live_score(bracket: list[dict], game_data: dict) -> None:
+        """Copy the active game's reconciled score onto its series in the bracket.
+
+        Series live scores come from the scoreboard feed alone, which can lag the goal
+        events used for the active game (see reconcile_scores), so the bracket and the
+        active game would briefly disagree.
+        """
+        if game_data.get("game_state") != GAME_STATE_LIVE:
+            return
+        home_id = str(game_data.get("home_team_id") or "")
+        away_id = str(game_data.get("away_team_id") or "")
+        for rnd in bracket:
+            for series in rnd.get("series", []):
+                t1, t2 = str(series.get("team1_id") or ""), str(series.get("team2_id") or "")
+                if series.get("game_state") != GAME_STATE_LIVE or {t1, t2} != {home_id, away_id}:
+                    continue
+                t1_score = game_data.get("home_score") if t1 == home_id else game_data.get("away_score")
+                t2_score = game_data.get("away_score") if t1 == home_id else game_data.get("home_score")
+                series["game_score"] = f"{t1_score}-{t2_score}"
+                return
 
     def _nhl_series_obj(
         self, series, top, bot, top_id, bot_id, top_wins, bot_wins,
@@ -656,6 +679,7 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Next game from schedule
         next_game = self._ht_first_upcoming_followed(schedule_games)
 
+        self._sync_bracket_live_score(bracket, game_data)
         return {
             **game_data,
             "bracket": bracket,
@@ -1248,32 +1272,45 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if away_abbrev:
             team_name_by_abbrev[away_abbrev] = data.get("away_team") or opp_team or away_abbrev
 
+        if state not in (GAME_STATE_PRE, GAME_STATE_LIVE, GAME_STATE_FINAL) or not game_id:
+            return
+
+        our_goals = [e for e in data.get("game_events", []) if e.get("type") == "goal" and e.get("is_tracked_team")]
+        if self._notif_goal_game_id.get(our_id) != game_id:
+            # First time this game is seen for this team (normally while PRE; otherwise
+            # after an HA restart or reload mid-game): record what has already happened
+            # without announcing it.
+            self._notif_goal_game_id[our_id] = game_id
+            self._notif_goal_count[our_id] = len(our_goals)
+            if state == GAME_STATE_FINAL:
+                for team_id in (data.get("home_team_id"), data.get("away_team_id")):
+                    if str(team_id or "") in self.followed_team_ids:
+                        self._notif_win_sent[str(team_id)] = game_id
+            if state != GAME_STATE_PRE:
+                return
+
         # Goal
-        if opts.get(CONF_NOTIFY_GOAL_ENABLED) and state == GAME_STATE_LIVE and game_id:
-            targets = self._parse_targets(opts.get(CONF_NOTIFY_GOAL_TARGETS, []))
-            if targets:
-                if self._notif_goal_game_id.get(our_id) != game_id:
-                    self._notif_goal_game_id[our_id] = game_id
-                    self._notif_goal_count[our_id] = 0
-                our_goals = [e for e in data.get("game_events", []) if e.get("type") == "goal" and e.get("is_tracked_team")]
-                prev = self._notif_goal_count.get(our_id, 0)
-                if len(our_goals) > prev:
-                    for goal in our_goals[:len(our_goals) - prev]:
-                        scorer = goal.get("player_name", "")
-                        tag = " (PP)" if goal.get("is_power_play") else " (SH)" if goal.get("is_short_handed") else " (EN)" if goal.get("is_empty_net") else ""
-                        # Use the goal's team_abbrev to get the correct team name
-                        scoring_abbrev = goal.get("team_abbrev", "")
-                        scoring_team = team_name_by_abbrev.get(scoring_abbrev) or our_team
-                        score_str = f"{our_score}–{opp_score}" if our_score is not None else ""
-                        msg = f"{scorer}{tag} — P{goal.get('period','')} {goal.get('time','')}".strip()
-                        if score_str:
-                            msg += f" | {score_str}"
-                        await self._send_notifications(targets, f"GOAL! {scoring_team} scores!", msg)
-                    self._notif_goal_count[our_id] = len(our_goals)
+        if state == GAME_STATE_LIVE:
+            targets = self._parse_targets(opts.get(CONF_NOTIFY_GOAL_TARGETS, [])) if opts.get(CONF_NOTIFY_GOAL_ENABLED) else []
+            prev = self._notif_goal_count.get(our_id, 0)
+            if targets and len(our_goals) > prev:
+                for goal in our_goals[:len(our_goals) - prev]:
+                    scorer = goal.get("player_name", "")
+                    tag = " (PP)" if goal.get("is_power_play") else " (SH)" if goal.get("is_short_handed") else " (EN)" if goal.get("is_empty_net") else ""
+                    # Use the goal's team_abbrev to get the correct team name
+                    scoring_abbrev = goal.get("team_abbrev", "")
+                    scoring_team = team_name_by_abbrev.get(scoring_abbrev) or our_team
+                    score_str = f"{our_score}–{opp_score}" if our_score is not None else ""
+                    msg = f"{scorer}{tag} — P{goal.get('period','')} {goal.get('time','')}".strip()
+                    if score_str:
+                        msg += f" | {score_str}"
+                    await self._send_notifications(targets, f"GOAL! {scoring_team} scores!", msg)
+            # Always resync so a goal removed on review doesn't swallow the next one
+            self._notif_goal_count[our_id] = len(our_goals)
 
         # Final score — win or lose. Prefer the winning followed team (handles the
         # both-teams-followed case); otherwise report the loss for the followed team.
-        if opts.get(CONF_NOTIFY_WIN_ENABLED, NOTIFY_ENABLED_DEFAULTS[CONF_NOTIFY_WIN_ENABLED]) and game_id and state == GAME_STATE_FINAL:
+        if opts.get(CONF_NOTIFY_WIN_ENABLED, NOTIFY_ENABLED_DEFAULTS[CONF_NOTIFY_WIN_ENABLED]) and state == GAME_STATE_FINAL:
             targets = self._parse_targets(opts.get(CONF_NOTIFY_WIN_TARGETS, []))
             if targets:
                 home_id_str = str(data.get("home_team_id") or "")
