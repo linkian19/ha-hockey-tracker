@@ -99,5 +99,18 @@
         }
       }
     }
+  },
+  "selector": {
+    "entry_type": {
+      "options": {
+        "team": "Team Tracker",
+        "playoff": "Playoff Tracker"
+      }
+    }
+  },
+  "exceptions": {
+    "not_hockey_tracker_entity": {
+      "message": "{entity_id} is not a loaded Hockey Tracker sensor."
+    }
   }
 }

@@ -30,6 +30,8 @@ def team_entry() -> MockConfigEntry:
         domain=DOMAIN,
         title="Kansas City Mavericks",
         unique_id="hockey_ECHL_56",
+        version=1,
+        minor_version=2,
         data={
             CONF_ENTRY_TYPE: ENTRY_TYPE_TEAM,
             CONF_LEAGUE: "ECHL",

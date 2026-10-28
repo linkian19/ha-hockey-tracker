@@ -7,7 +7,16 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import ATTRIBUTION, CONF_ENTRY_TYPE, CONF_TEAM_NAME, DOMAIN, ENTRY_TYPE_PLAYOFF, GAME_STATE_NONE
+from . import HockeyConfigEntry
+from .const import (
+    ATTRIBUTION,
+    CONF_ENTRY_TYPE,
+    CONF_LEAGUE,
+    CONF_TEAM_ID,
+    CONF_TEAM_NAME,
+    ENTRY_TYPE_PLAYOFF,
+    GAME_STATE_NONE,
+)
 from .coordinator import HockeyCoordinator
 from .playoff_sensor import PlayoffSensor
 
@@ -21,10 +30,10 @@ _GAME_ATTRS = (
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: ConfigEntry,
+    entry: HockeyConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    coordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator = entry.runtime_data
     if entry.data.get(CONF_ENTRY_TYPE) == ENTRY_TYPE_PLAYOFF:
         async_add_entities([PlayoffSensor(coordinator, entry)])
     else:
@@ -42,7 +51,9 @@ class HockeyGameSensor(CoordinatorEntity[HockeyCoordinator], SensorEntity):
     def __init__(self, coordinator: HockeyCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator)
         self._team_name: str = entry.data[CONF_TEAM_NAME]
-        self._attr_unique_id = f"hockey_tracker_{entry.data['team_id']}"
+        # League is part of the ID — HockeyTech team IDs are only unique per league
+        # (migrated from hockey_tracker_{team_id} in __init__.async_migrate_entry)
+        self._attr_unique_id = f"hockey_tracker_{entry.data[CONF_LEAGUE]}_{entry.data[CONF_TEAM_ID]}"
         self._attr_name = f"{self._team_name} Game"
 
     @property
