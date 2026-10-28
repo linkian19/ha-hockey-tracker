@@ -190,8 +190,11 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 data = await self._fetch_nhl()
             else:
                 data = await self._fetch_hockeytech()
-        except aiohttp.ClientError as err:
-            raise UpdateFailed(f"Request failed: {err}") from err
+        except (aiohttp.ClientError, TimeoutError) as err:
+            raise UpdateFailed(f"Request failed: {err!r}") from err
+        except ValueError as err:
+            # Malformed/non-JSON API response (json.JSONDecodeError is a ValueError)
+            raise UpdateFailed(f"Invalid API response: {err}") from err
 
         # Fire notifications before any state transitions so win/goal
         # alerts fire the first time FINAL/goals are seen.

@@ -13,14 +13,20 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
-      - name: Build zip artifact
+      - name: Tag matches manifest.json version
         run: |
-          zip -r hockey-tracker-${{ github.ref_name }}.zip custom_components/hockey_tracker/
+          MANIFEST="v$(jq -r .version custom_components/hockey_tracker/manifest.json)"
+          if [ "$MANIFEST" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match manifest.json version $MANIFEST"
+            exit 1
+          fi
 
+      # HACS installs the integration from the tagged source; the release body
+      # gets the generated Full Changelog link and the New / Fixes / Notes
+      # summary is added afterwards with `gh release edit`
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: hockey-tracker-${{ github.ref_name }}.zip
           generate_release_notes: true

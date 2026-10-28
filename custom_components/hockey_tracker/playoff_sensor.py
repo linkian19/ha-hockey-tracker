@@ -3,11 +3,9 @@ from __future__ import annotations
 
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import ATTRIBUTION, CONF_FOLLOWED_TEAM_NAMES, CONF_LEAGUE, DOMAIN
+from .const import ATTRIBUTION, CONF_FOLLOWED_TEAM_NAMES, CONF_LEAGUE, GAME_STATE_NONE
 from .playoff_coordinator import PlayoffCoordinator
 
 _GAME_ATTRS = (
@@ -18,13 +16,7 @@ _GAME_ATTRS = (
 )
 
 
-async def async_setup_entry(
-    hass: HomeAssistant,
-    entry: ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
-) -> None:
-    coordinator: PlayoffCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([PlayoffSensor(coordinator, entry)])
+# Entities are added by sensor.py's async_setup_entry (the only sensor platform).
 
 
 class PlayoffSensor(CoordinatorEntity[PlayoffCoordinator], SensorEntity):
@@ -50,12 +42,13 @@ class PlayoffSensor(CoordinatorEntity[PlayoffCoordinator], SensorEntity):
         self._attr_unique_id = f"hockey_playoff_{league}_{entry.entry_id[-8:]}"
 
     @property
-    def state(self) -> str:
-        return self.coordinator.data.get("game_state", "NO_GAME") if self.coordinator.data else "NO_GAME"
+    def native_value(self) -> str:
+        data = self.coordinator.data or {}
+        return data.get("game_state", GAME_STATE_NONE)
 
     @property
     def icon(self) -> str:
-        state = self.state
+        state = self.native_value
         if state == "LIVE":
             return "mdi:hockey-puck"
         if state == "PRE":

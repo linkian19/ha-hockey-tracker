@@ -120,8 +120,11 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 data = await self._fetch_nhl_playoffs()
             else:
                 data = await self._fetch_ht_playoffs()
-        except aiohttp.ClientError as err:
-            raise UpdateFailed(f"Request failed: {err}") from err
+        except (aiohttp.ClientError, TimeoutError) as err:
+            raise UpdateFailed(f"Request failed: {err!r}") from err
+        except ValueError as err:
+            # Malformed/non-JSON API response (json.JSONDecodeError is a ValueError)
+            raise UpdateFailed(f"Invalid API response: {err}") from err
 
         await self._maybe_notify(data)
 
@@ -1350,17 +1353,32 @@ class PlayoffCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         except (ValueError, TypeError):
                             pass
                     if recent:
-                        await self._send_notifications(targets, title, msg)
+                        # Same tag scheme as the Team Tracker so the final score
+                        # replaces any earlier notification for this game on mobile
+                        score_tag = {"tag": f"hockey_tracker_{notify_id}_{game_id}_score"}
+                        await self._send_notifications(targets, title, msg, data=score_tag)
                         self._notif_win_sent[notify_id] = game_id
 
-    async def _send_notifications(self, targets: list[str], title: str, message: str) -> None:
+    async def _send_notifications(
+        self, targets: list[str], title: str, message: str, data: dict | None = None
+    ) -> None:
         for target in targets:
+            parts = target.rsplit(".", 1)
+            domain = parts[0] if len(parts) == 2 else "notify"
+            service_name = parts[1] if len(parts) == 2 else parts[0]
+            payload = {"title": title, "message": message}
             try:
-                parts = target.rsplit(".", 1)
-                domain = parts[0] if len(parts) == 2 else "notify"
-                service_name = parts[1] if len(parts) == 2 else parts[0]
                 await self.hass.services.async_call(
-                    domain, service_name, {"title": title, "message": message}, blocking=False
+                    domain, service_name,
+                    {**payload, "data": data} if data else payload,
+                    blocking=False,
                 )
             except Exception as err:
+                if data:
+                    # Some notify services reject a data payload; resend without it.
+                    try:
+                        await self.hass.services.async_call(domain, service_name, payload, blocking=False)
+                        continue
+                    except Exception as retry_err:
+                        err = retry_err
                 _LOGGER.warning("Failed to send notification to %s: %s", target, err)
