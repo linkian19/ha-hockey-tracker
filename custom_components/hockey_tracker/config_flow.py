@@ -72,7 +72,6 @@ LEAGUE_OPTIONS = [
     LEAGUE_CHL,
     LEAGUE_OHL,
     LEAGUE_WHL,
-    NOTIFY_ENABLED_DEFAULTS,
     LEAGUE_QMJHL,
     LEAGUE_USHL,
     LEAGUE_BCHL,
@@ -198,7 +197,7 @@ class HockeyTrackerConfigFlow(ConfigFlow, domain=DOMAIN):
                         if self._entry_type == ENTRY_TYPE_PLAYOFF:
                             return await self.async_step_followed_teams()
                         return await self.async_step_team()
-                except aiohttp.ClientError:
+                except (aiohttp.ClientError, TimeoutError):
                     errors["base"] = "cannot_connect"
                 except Exception:
                     _LOGGER.exception("Unexpected error fetching NHL teams")
@@ -233,7 +232,7 @@ class HockeyTrackerConfigFlow(ConfigFlow, domain=DOMAIN):
             except aiohttp.ClientResponseError as err:
                 _LOGGER.error("API key validation failed: %s", err)
                 errors["base"] = "invalid_auth"
-            except aiohttp.ClientError:
+            except (aiohttp.ClientError, TimeoutError):
                 errors["base"] = "cannot_connect"
             except Exception:
                 _LOGGER.exception("Unexpected error during API key validation")

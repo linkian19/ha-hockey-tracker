@@ -43,6 +43,8 @@ A [Home Assistant](https://www.home-assistant.io/) custom integration that track
 
 ## Installation
 
+Requires Home Assistant **2024.4** or newer.
+
 ### HACS (recommended)
 
 1. In Home Assistant, open **HACS → Integrations**

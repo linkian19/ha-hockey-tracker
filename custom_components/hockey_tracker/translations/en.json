@@ -49,8 +49,7 @@
       "unknown": "Unexpected error. Check logs."
     },
     "abort": {
-      "already_configured": "This team is already configured.",
-      "already_configured_playoff": "A playoff tracker for this league and team combination is already configured."
+      "already_configured": "This tracker is already configured."
     }
   },
   "options": {
