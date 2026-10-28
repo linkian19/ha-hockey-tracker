@@ -2,22 +2,17 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-import json
 import logging
 import re
 from typing import Any
 
-import aiohttp
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
+from .base_coordinator import HockeyBaseCoordinator
 from .const import (
     AHL_GAME_URL,
-    CONF_API_KEY,
-    CONF_LEAGUE,
     CONF_NOTIFY_GOAL_ENABLED,
     CONF_NOTIFY_GOAL_TARGETS,
     CONF_NOTIFY_LEAD_ENABLED,
@@ -31,15 +26,12 @@ from .const import (
     CONF_NOTIFY_WIN_ENABLED,
     CONF_NOTIFY_WIN_TARGETS,
     CONF_TEAM_ID,
-    DOMAIN,
     FINAL_DISPLAY_SECONDS,
     GAME_STATE_FINAL,
     GAME_STATE_LIVE,
     GAME_STATE_NONE,
     GAME_STATE_PRE,
-    HOCKEYTECH_BASE,
     HOCKEYTECH_GAME_REPORT_URL,
-    HOCKEYTECH_LEAGUES,
     LEAGUE_AHL,
     LEAGUE_ECHL,
     LEAGUE_NHL,
@@ -121,12 +113,11 @@ def _event_sort_key(e: dict) -> tuple:
     return (e.get("period", 0), t)
 
 
-class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
+class HockeyCoordinator(HockeyBaseCoordinator):
     """Polls game data with adaptive update intervals. Supports all HockeyTech leagues and NHL."""
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
-        self._entry = entry
-        self.league: str = entry.data[CONF_LEAGUE]
+        super().__init__(hass, entry)
         self.team_id: str = entry.data[CONF_TEAM_ID]
         self.team_logo_url: str | None = entry.data.get("team_logo_url")
         self._schedule_cache: list[dict] | None = None
@@ -138,10 +129,6 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_game_summary: dict | None = None
         self._last_game_fetch_attempted: bool = False
         self._last_completed_ht_id: str | None = None
-        # Logo cache keyed by team ID (HockeyTech) or abbreviation (NHL).
-        # HockeyTech CDN paths include a version suffix that cannot be constructed
-        # from team ID alone, so we populate this from live API responses.
-        self._logo_cache: dict[str, str] = {}
         # Notification state — prevents duplicate alerts for the same event.
         self._notif_pregame_sent_id: str | None = None
         self._notif_win_sent_id: str | None = None
@@ -153,21 +140,6 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._notif_lead: str | None = None  # "us" | "them" | "tied"
         self._notif_period_sent: int = 0
 
-        if self.league in HOCKEYTECH_LEAGUES:
-            self.api_key: str = entry.data[CONF_API_KEY]
-            league_cfg = HOCKEYTECH_LEAGUES[self.league]
-            self._client_code: str = league_cfg["client_code"]
-
-        super().__init__(
-            hass,
-            _LOGGER,
-            config_entry=entry,
-            name=DOMAIN,
-            update_interval=timedelta(seconds=SCAN_INTERVAL_IDLE),
-        )
-
-    def _notif_opts(self) -> dict:
-        return self._entry.options
 
     def clear_schedule_cache(self) -> None:
         """Force the next update to re-fetch schedule/logo data from the API."""
@@ -185,18 +157,12 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     # Coordinator lifecycle
     # ------------------------------------------------------------------
 
-    async def _async_update_data(self) -> dict[str, Any]:
-        try:
-            if self.league == LEAGUE_NHL:
-                data = await self._fetch_nhl()
-            else:
-                data = await self._fetch_hockeytech()
-        except (aiohttp.ClientError, TimeoutError) as err:
-            raise UpdateFailed(f"Request failed: {err!r}") from err
-        except ValueError as err:
-            # Malformed/non-JSON API response (json.JSONDecodeError is a ValueError)
-            raise UpdateFailed(f"Invalid API response: {err}") from err
+    async def _async_fetch(self) -> dict[str, Any]:
+        if self.league == LEAGUE_NHL:
+            return await self._fetch_nhl()
+        return await self._fetch_hockeytech()
 
+    async def _async_process(self, data: dict[str, Any]) -> dict[str, Any]:
         # Fire notifications before any state transitions so win/goal
         # alerts fire the first time FINAL/goals are seen.
         await self._maybe_notify(data)
@@ -580,22 +546,6 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     return f"https://echl.com/games/{year}/{month}/{day}/{home_slug}-vs-{away_slug}"
         return HOCKEYTECH_GAME_REPORT_URL.format(client_code=self._client_code, game_id=game_id)
 
-    @staticmethod
-    def _ht_parse_dt(game: dict) -> datetime:
-        raw = game.get("GameDateISO8601", "")
-        try:
-            dt = datetime.fromisoformat(raw)
-            return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
-        except (ValueError, TypeError):
-            return datetime.min.replace(tzinfo=timezone.utc)
-
-    @staticmethod
-    def _upscale_ht_logo(url: str | None) -> str | None:
-        """Strip size subdirectory from HockeyTech CDN URLs to get full-res image."""
-        if not url:
-            return None
-        return re.sub(r"/logos/\d+x\d+/", "/logos/", url)
-
     def _my_logo(self) -> str | None:
         """Return the best available logo URL for the tracked team.
 
@@ -605,37 +555,6 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if self.league == LEAGUE_NHL:
             return self._nhl_logo(self.team_id)
         return self._logo_cache.get(self.team_id) or self.team_logo_url
-
-    async def _fetch_ht_game_summary(self, game_id: str) -> dict | None:
-        """Fetch shot totals and play-by-play events for a live game.
-
-        The statviewfeed endpoint wraps its JSON in outer parentheses (JSONP
-        style) regardless of fmt=json, so we strip those before parsing.
-        """
-        try:
-            session = async_get_clientsession(self.hass)
-            params = {
-                "feed": "statviewfeed",
-                "view": "gameSummary",
-                "game_id": game_id,
-                "key": self.api_key,
-                "client_code": self._client_code,
-                "lang_code": "en",
-                "fmt": "json",
-            }
-            async with session.get(
-                HOCKEYTECH_BASE,
-                params=params,
-                timeout=aiohttp.ClientTimeout(total=15),
-            ) as resp:
-                resp.raise_for_status()
-                text = (await resp.text()).strip()
-                if text.startswith("(") and text.endswith(")"):
-                    text = text[1:-1]
-                return json.loads(text)
-        except Exception as err:
-            _LOGGER.debug("Game summary fetch failed for game %s: %s", game_id, err)
-            return None
 
     def _ht_extract_events(self, summary: dict) -> list[dict]:
         """Build a chronological event list (goals + penalties) from a game summary."""
@@ -685,23 +604,6 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         events.sort(key=_event_sort_key, reverse=True)
         return events
-
-    async def _fetch_ht(self, params: dict[str, str]) -> dict[str, Any]:
-        base = {
-            "key": self.api_key,
-            "client_code": self._client_code,
-            "lang_code": "en",
-            "fmt": "json",
-        }
-        base.update(params)
-        session = async_get_clientsession(self.hass)
-        async with session.get(
-            HOCKEYTECH_BASE,
-            params=base,
-            timeout=aiohttp.ClientTimeout(total=15),
-        ) as resp:
-            resp.raise_for_status()
-            return await resp.json(content_type=None)
 
     # ------------------------------------------------------------------
     # NHL
@@ -893,22 +795,6 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         }
         return reconcile_scores(result)
 
-    async def _fetch_nhl_landing(self, game_id: int) -> dict | None:
-        """Fetch NHL gamecenter landing page — provides SOG and scoring/penalty events."""
-        try:
-            return await self._fetch_json(f"{NHL_API_BASE}/gamecenter/{game_id}/landing")
-        except Exception as err:
-            _LOGGER.debug("NHL landing fetch failed for game %s: %s", game_id, err)
-            return None
-
-    async def _fetch_nhl_playbyplay(self, game_id: int) -> dict | None:
-        """Fetch NHL play-by-play — provides individual shot-on-goal events."""
-        try:
-            return await self._fetch_json(f"{NHL_API_BASE}/gamecenter/{game_id}/play-by-play")
-        except Exception as err:
-            _LOGGER.debug("NHL play-by-play fetch failed for game %s: %s", game_id, err)
-            return None
-
     def _nhl_extract_events(self, landing: dict, playbyplay: dict | None = None) -> list[dict]:
         """Build a chronological event list (goals + penalties + shots) from NHL data."""
         # Goalie pull: no explicit goalie_pull events in landing summary. The
@@ -1029,47 +915,9 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         name = team.get("commonName", {}).get("default", team.get("abbrev", ""))
         return f"{city} {name}".strip()
 
-    def _nhl_logo(self, abbrev: str | None, direct_url: str | None = None) -> str | None:
-        """Return the best available logo URL for an NHL team.
-
-        Priority: direct URL from API response → standings/scoreboard cache →
-        constructed SVG URL as last resort. Always uses _light.svg variant so
-        logos are visible on light-themed HA dashboards.
-        """
-        url = direct_url or self._logo_cache.get(abbrev or "")
-        if url:
-            return url.replace("_dark.svg", "_light.svg")
-        if not abbrev:
-            return None
-        return f"https://assets.nhle.com/logos/nhl/svg/{abbrev}_light.svg"
-
-    @staticmethod
-    def _nhl_parse_dt(game: dict) -> datetime:
-        raw = game.get("startTimeUTC") or game.get("gameDate", "")
-        try:
-            dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-            return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
-        except (ValueError, TypeError):
-            return datetime.min.replace(tzinfo=timezone.utc)
-
-    async def _fetch_json(self, url: str) -> dict[str, Any]:
-        session = async_get_clientsession(self.hass)
-        async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
-            resp.raise_for_status()
-            return await resp.json(content_type=None)
-
     # ------------------------------------------------------------------
     # Notifications
     # ------------------------------------------------------------------
-
-    @staticmethod
-    def _parse_targets(val: Any) -> list[str]:
-        """Parse notification targets from either list (new) or comma-string (legacy) format."""
-        if isinstance(val, list):
-            return [s for s in val if s]
-        if isinstance(val, str):
-            return [s.strip() for s in val.split(",") if s.strip()]
-        return []
 
     async def _maybe_notify(self, data: dict) -> None:
         """Fire HA notify services for pre-game, goal, lead, period, and final-score events."""
@@ -1210,30 +1058,6 @@ class HockeyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             else ""
         )
         return f"{goal.get('player_name', '')}{tag} — P{goal.get('period', '')} {goal.get('time', '')}"
-
-    async def _send_notifications(
-        self, targets: list[str], title: str, message: str, data: dict | None = None
-    ) -> None:
-        for target in targets:
-            parts = target.rsplit(".", 1)
-            domain = parts[0] if len(parts) == 2 else "notify"
-            service_name = parts[1] if len(parts) == 2 else parts[0]
-            payload = {"title": title, "message": message}
-            try:
-                await self.hass.services.async_call(
-                    domain, service_name,
-                    {**payload, "data": data} if data else payload,
-                    blocking=False,
-                )
-            except Exception as err:
-                if data:
-                    # Some notify services reject a data payload; resend without it.
-                    try:
-                        await self.hass.services.async_call(domain, service_name, payload, blocking=False)
-                        continue
-                    except Exception as retry_err:
-                        err = retry_err
-                _LOGGER.warning("Failed to send notification to %s: %s", target, err)
 
     # ------------------------------------------------------------------
     # Shared helpers
