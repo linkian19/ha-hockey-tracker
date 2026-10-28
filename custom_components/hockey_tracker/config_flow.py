@@ -9,6 +9,7 @@ import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
 from homeassistant.core import callback
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.selector import (
     BooleanSelector,
     SelectSelector,
@@ -83,49 +84,49 @@ LEAGUE_OPTIONS = [
 ]
 
 
-async def _fetch_ht_teams(api_key: str, client_code: str) -> list[dict]:
+async def _fetch_ht_teams(
+    session: aiohttp.ClientSession, api_key: str, client_code: str
+) -> list[dict]:
     """Validate the HockeyTech API key and return the team list."""
-    async with aiohttp.ClientSession() as session:
-        async with session.get(
-            HOCKEYTECH_BASE,
-            params={
-                "feed": "modulekit", "view": "scorebar",
-                "key": api_key, "client_code": client_code,
-                "lang_code": "en", "fmt": "json",
-                "numberofdaysahead": "1", "numberofdaysback": "1",
-            },
-            timeout=aiohttp.ClientTimeout(total=10),
-        ) as resp:
-            resp.raise_for_status()
-            data = await resp.json(content_type=None)
-            if "SiteKit" not in data:
-                raise aiohttp.ClientResponseError(resp.request_info, resp.history, status=401)
+    async with session.get(
+        HOCKEYTECH_BASE,
+        params={
+            "feed": "modulekit", "view": "scorebar",
+            "key": api_key, "client_code": client_code,
+            "lang_code": "en", "fmt": "json",
+            "numberofdaysahead": "1", "numberofdaysback": "1",
+        },
+        timeout=aiohttp.ClientTimeout(total=10),
+    ) as resp:
+        resp.raise_for_status()
+        data = await resp.json(content_type=None)
+        if "SiteKit" not in data:
+            raise aiohttp.ClientResponseError(resp.request_info, resp.history, status=401)
 
-        async with session.get(
-            HOCKEYTECH_BASE,
-            params={
-                "feed": "modulekit", "view": "teamsbyseason",
-                "key": api_key, "client_code": client_code,
-                "lang_code": "en", "fmt": "json",
-            },
-            timeout=aiohttp.ClientTimeout(total=10),
-        ) as resp:
-            resp.raise_for_status()
-            teams_data = await resp.json(content_type=None)
+    async with session.get(
+        HOCKEYTECH_BASE,
+        params={
+            "feed": "modulekit", "view": "teamsbyseason",
+            "key": api_key, "client_code": client_code,
+            "lang_code": "en", "fmt": "json",
+        },
+        timeout=aiohttp.ClientTimeout(total=10),
+    ) as resp:
+        resp.raise_for_status()
+        teams_data = await resp.json(content_type=None)
 
     site_kit = teams_data.get("SiteKit", {})
     return site_kit.get("Teamsbyseason") or site_kit.get("Teams") or site_kit.get("teams") or []
 
 
-async def _fetch_nhl_teams() -> list[dict]:
+async def _fetch_nhl_teams(session: aiohttp.ClientSession) -> list[dict]:
     """Fetch NHL teams from the standings endpoint."""
-    async with aiohttp.ClientSession() as session:
-        async with session.get(
-            f"{NHL_API_BASE}/standings/now",
-            timeout=aiohttp.ClientTimeout(total=10),
-        ) as resp:
-            resp.raise_for_status()
-            data = await resp.json(content_type=None)
+    async with session.get(
+        f"{NHL_API_BASE}/standings/now",
+        timeout=aiohttp.ClientTimeout(total=10),
+    ) as resp:
+        resp.raise_for_status()
+        data = await resp.json(content_type=None)
 
     teams = []
     for entry in data.get("standings", []):
@@ -147,6 +148,8 @@ class HockeyTrackerConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Hockey Tracker."""
 
     VERSION = 1
+    # 1.2: Team Tracker sensor unique_id includes the league (see async_migrate_entry)
+    MINOR_VERSION = 2
 
     def __init__(self) -> None:
         self._entry_type: str = ENTRY_TYPE_TEAM
@@ -157,7 +160,7 @@ class HockeyTrackerConfigFlow(ConfigFlow, domain=DOMAIN):
     @staticmethod
     @callback
     def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
-        return HockeyTrackerOptionsFlow(config_entry)
+        return HockeyTrackerOptionsFlow()
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -171,10 +174,8 @@ class HockeyTrackerConfigFlow(ConfigFlow, domain=DOMAIN):
             step_id="user",
             data_schema=vol.Schema(
                 {vol.Required(CONF_ENTRY_TYPE): SelectSelector(SelectSelectorConfig(
-                    options=[
-                        {"value": ENTRY_TYPE_TEAM, "label": "Team Tracker"},
-                        {"value": ENTRY_TYPE_PLAYOFF, "label": "Playoff Tracker"},
-                    ],
+                    options=[ENTRY_TYPE_TEAM, ENTRY_TYPE_PLAYOFF],
+                    translation_key=CONF_ENTRY_TYPE,
                     mode=SelectSelectorMode.DROPDOWN,
                 ))}
             ),
@@ -190,7 +191,7 @@ class HockeyTrackerConfigFlow(ConfigFlow, domain=DOMAIN):
             self._league = user_input[CONF_LEAGUE]
             if self._league == LEAGUE_NHL:
                 try:
-                    self._teams = await _fetch_nhl_teams()
+                    self._teams = await _fetch_nhl_teams(async_get_clientsession(self.hass))
                     if not self._teams:
                         errors["base"] = "no_teams"
                     else:
@@ -222,7 +223,9 @@ class HockeyTrackerConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             self._api_key = user_input[CONF_API_KEY]
             try:
-                self._teams = await _fetch_ht_teams(self._api_key, league_cfg["client_code"])
+                self._teams = await _fetch_ht_teams(
+                    async_get_clientsession(self.hass), self._api_key, league_cfg["client_code"]
+                )
                 if not self._teams:
                     errors["base"] = "no_teams"
                 else:
@@ -344,16 +347,13 @@ class HockeyTrackerConfigFlow(ConfigFlow, domain=DOMAIN):
 class HockeyTrackerOptionsFlow(OptionsFlow):
     """Options flow for configuring Hockey Tracker notifications."""
 
-    def __init__(self, config_entry: ConfigEntry) -> None:
-        self._entry = config_entry
-
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
 
-        opts = self._entry.options
+        opts = self.config_entry.options
 
         notify_options = sorted(
             f"notify.{name}"
@@ -373,7 +373,7 @@ class HockeyTrackerOptionsFlow(OptionsFlow):
 
         # Each notification type is an enable toggle followed by its targets.
         # Opponent goal, lead change and end-of-period alerts are Team Tracker only.
-        is_playoff = self._entry.data.get(CONF_ENTRY_TYPE) == ENTRY_TYPE_PLAYOFF
+        is_playoff = self.config_entry.data.get(CONF_ENTRY_TYPE) == ENTRY_TYPE_PLAYOFF
         notify_types = [
             (CONF_NOTIFY_PREGAME_ENABLED, CONF_NOTIFY_PREGAME_TARGETS),
             (CONF_NOTIFY_GOAL_ENABLED, CONF_NOTIFY_GOAL_TARGETS),

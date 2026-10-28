@@ -1,0 +1,7 @@
+{
+  "services": {
+    "force_refresh": {
+      "service": "mdi:refresh"
+    }
+  }
+}

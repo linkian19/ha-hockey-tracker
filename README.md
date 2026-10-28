@@ -43,7 +43,7 @@ A [Home Assistant](https://www.home-assistant.io/) custom integration that track
 
 ## Installation
 
-Requires Home Assistant **2024.4** or newer.
+Requires Home Assistant **2024.11** or newer.
 
 ### HACS (recommended)
 
@@ -140,6 +140,14 @@ data:
 ```
 
 The companion card's refresh button calls this service automatically.
+
+Passing an entity that isn't a loaded Hockey Tracker sensor raises an error (shown in the UI / automation trace) instead of silently doing nothing.
+
+---
+
+## Diagnostics
+
+**Settings → Devices & Services → Hockey Tracker → ⋮ → Download diagnostics** produces a JSON file with the entry's settings and the latest data the integration fetched — useful when reporting a score or notification problem. The API key and notification targets (which contain device names) are redacted.
 
 ---
 
