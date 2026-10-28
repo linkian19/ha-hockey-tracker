@@ -4,6 +4,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
+import voluptuous as vol
+
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant, ServiceCall
 
@@ -47,14 +49,20 @@ def test_reconcile_scores_takes_higher_count() -> None:
 
 
 def _register_notify(hass: HomeAssistant, reject_data: bool = False) -> list[ServiceCall]:
+    """Fake notify service. reject_data=True gives it a schema without `data`, so HA
+    rejects such calls at validation time — which async_call raises to the caller
+    even with blocking=False (handler errors would not propagate)."""
     calls: list[ServiceCall] = []
 
     async def _handler(call: ServiceCall) -> None:
-        if reject_data and "data" in call.data:
-            raise ValueError("data not supported")
         calls.append(call)
 
-    hass.services.async_register("notify", "mobile_app_phone", _handler)
+    schema = (
+        vol.Schema({vol.Required("title"): str, vol.Required("message"): str})
+        if reject_data
+        else None
+    )
+    hass.services.async_register("notify", "mobile_app_phone", _handler, schema=schema)
     return calls
 
 
