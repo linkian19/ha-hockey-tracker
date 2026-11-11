@@ -28,7 +28,7 @@ A [Home Assistant](https://www.home-assistant.io/) custom integration that track
 - Adaptive polling — 15 s at end of regulation, 30 s during live games, up to 2 h when no game is near
 - 2-hour post-game FINAL window — final score stays visible well after the buzzer
 - `last_fetched` attribute — always know how fresh the data is
-- Built-in notifications — pre-game, goal, opponent goal, lead change / tie, end-of-period, and final-score alerts via any HA notify service
+- Built-in notifications — game day, pre-game, goal, opponent goal, lead change / tie, end-of-period, and final-score alerts via any HA notify service
 - `hockey_tracker.force_refresh` service — clears cache and hard-pulls fresh data on demand
 
 ### Playoff Tracker
@@ -45,13 +45,18 @@ A [Home Assistant](https://www.home-assistant.io/) custom integration that track
 
 Requires Home Assistant **2024.11** or newer.
 
-### HACS (recommended)
+### Marketplace (recommended)
 
-1. In Home Assistant, open **HACS → Integrations**
-2. Click the three-dot menu → **Custom repositories**
-3. Add `https://github.com/linkian19/ha-hockey-tracker` with category **Integration**
-4. Search for **Hockey Tracker** and install
-5. Restart Home Assistant
+Home Assistant 2026.11 replaced HACS with the built-in **Marketplace**. Hockey Tracker is a custom repository:
+
+1. In Home Assistant, open **Settings → Marketplace**
+2. Select **Add from link** and enter `https://github.com/linkian19/ha-hockey-tracker`
+3. Select **Install** — setup starts straight away, no restart needed
+4. Updates appear under **Settings → Updates**; after updating, restart Home Assistant when the repair prompts you
+
+The Marketplace asks you to connect a GitHub account (a one-time device sign-in) the first time you add a custom repository.
+
+> On Home Assistant versions before 2026.11, add the same URL under **HACS → ⋮ → Custom repositories** with category **Integration** instead.
 
 ### Manual
 
@@ -104,6 +109,7 @@ After setup, configure alerts at **Settings → Devices & Services → Hockey Tr
 
 | Notification | Default | When it fires |
 |--------------|---------|---------------|
+| **Game day** | Off | Once at a time you choose (default 9:00 AM, HA's time zone) on days the tracked team has a game — e.g. "Kansas City Mavericks vs Tulsa Oilers at 7:05 PM (Cable Dahmer Arena)". Nothing is sent on days without a game *(Team Tracker only)* |
 | **Pre-game** | Off | Once per game when puck drop is 35 minutes or fewer away |
 | **Goal** | Off | Each time the tracked team scores during live play — includes scorer, strength (PP/SH/EN), period/time, and current score |
 | **Opponent goal** | Off | Each time the opponent scores during live play — same detail as the goal alert *(Team Tracker only)* |
@@ -112,6 +118,8 @@ After setup, configure alerts at **Settings → Devices & Services → Hockey Tr
 | **Final score** | **On** | Once when the game ends, **win or lose** — "Mavericks Win!" or "Final: Mavericks 2–3" |
 
 Each type has an independent enable toggle and a multi-select list of your configured HA notify services (mobile apps, persistent notification, etc.). Select as many targets as you like per type. **A type sends nothing until it has at least one target**, so the "On" defaults only take effect once you pick targets.
+
+**Game day** has a third option, **Game Day Notification Time**. The reminder runs on its own daily timer rather than the polling cycle, so it fires on time even when the next poll is hours away. At that time the integration checks the team's season schedule for a game whose start falls on today's date in Home Assistant's time zone (an away game at 1:05 AM UTC that is 7:05 PM the previous evening locally counts for the previous day). A doubleheader lists both games in one notification. Changing the time or toggle applies immediately with no reload, and the reminder is sent at most once per day even if you change the time after it has gone out.
 
 The final-score toggle keeps its original option key (`notify_win_enabled` / `notify_win_targets`), so existing win-notification settings carry over and now also cover losses.
 
@@ -388,10 +396,10 @@ The 5-minute interval after a scheduled start time covers a brief scoreboard lag
 ## Troubleshooting
 
 **Notification settings show raw key names like `notify_win_enabled`**
-Home Assistant loads custom integration translations at startup, not at reload time. After installing or updating via HACS, a full HA restart is required — go to **Settings → System → Restart**. A simple integration reload is not sufficient.
+Home Assistant loads custom integration translations at startup, not at reload time. After updating, a full HA restart is required — go to **Settings → System → Restart**. A simple integration reload is not sufficient.
 
 **Win/final notification fired for an old game after updating**
-Updating via HACS reloads the integration and resets in-memory notification state. The final-score notification includes a 12-hour recency guard (v1.3.8+), and since v1.10.0 a game first seen already FINAL is never announced.
+Updating the integration restarts it and resets in-memory notification state. The final-score notification includes a 12-hour recency guard (v1.3.8+), and since v1.10.0 a game first seen already FINAL is never announced.
 
 **Goal alerts replayed after a restart or reload during a game**
 Fixed in v1.10.0 — in-game alert state is baselined the first time a game is seen.

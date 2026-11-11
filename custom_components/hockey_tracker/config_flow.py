@@ -15,6 +15,7 @@ from homeassistant.helpers.selector import (
     SelectSelector,
     SelectSelectorConfig,
     SelectSelectorMode,
+    TimeSelector,
 )
 
 from .const import (
@@ -23,6 +24,9 @@ from .const import (
     CONF_FOLLOWED_TEAM_NAMES,
     CONF_FOLLOWED_TEAMS,
     CONF_LEAGUE,
+    CONF_NOTIFY_GAMEDAY_ENABLED,
+    CONF_NOTIFY_GAMEDAY_TARGETS,
+    CONF_NOTIFY_GAMEDAY_TIME,
     CONF_NOTIFY_GOAL_ENABLED,
     CONF_NOTIFY_GOAL_TARGETS,
     CONF_NOTIFY_LEAD_ENABLED,
@@ -37,6 +41,7 @@ from .const import (
     CONF_NOTIFY_WIN_TARGETS,
     CONF_TEAM_ID,
     CONF_TEAM_NAME,
+    DEFAULT_GAMEDAY_TIME,
     DOMAIN,
     ENTRY_TYPE_PLAYOFF,
     ENTRY_TYPE_TEAM,
@@ -372,9 +377,12 @@ class HockeyTrackerOptionsFlow(OptionsFlow):
             ))
 
         # Each notification type is an enable toggle followed by its targets.
-        # Opponent goal, lead change and end-of-period alerts are Team Tracker only.
+        # Game day, opponent goal, lead change and end-of-period alerts are Team Tracker only.
         is_playoff = self.config_entry.data.get(CONF_ENTRY_TYPE) == ENTRY_TYPE_PLAYOFF
-        notify_types = [
+        notify_types = [] if is_playoff else [
+            (CONF_NOTIFY_GAMEDAY_ENABLED, CONF_NOTIFY_GAMEDAY_TARGETS),
+        ]
+        notify_types += [
             (CONF_NOTIFY_PREGAME_ENABLED, CONF_NOTIFY_PREGAME_TARGETS),
             (CONF_NOTIFY_GOAL_ENABLED, CONF_NOTIFY_GOAL_TARGETS),
         ]
@@ -391,6 +399,9 @@ class HockeyTrackerOptionsFlow(OptionsFlow):
             enabled_default = opts.get(enabled_key, NOTIFY_ENABLED_DEFAULTS[enabled_key])
             fields[vol.Optional(enabled_key, default=enabled_default)] = BooleanSelector()
             fields[vol.Optional(targets_key, default=_targets_default(targets_key))] = _target_sel()
+            if enabled_key == CONF_NOTIFY_GAMEDAY_ENABLED:
+                gameday_time = opts.get(CONF_NOTIFY_GAMEDAY_TIME, DEFAULT_GAMEDAY_TIME)
+                fields[vol.Optional(CONF_NOTIFY_GAMEDAY_TIME, default=gameday_time)] = TimeSelector()
         schema = vol.Schema(fields)
 
         return self.async_show_form(step_id="init", data_schema=schema)

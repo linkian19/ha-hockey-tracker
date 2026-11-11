@@ -1,18 +1,23 @@
 """DataUpdateCoordinator for Hockey Tracker."""
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 import logging
 import re
 from typing import Any
 
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
+from homeassistant.helpers.event import async_track_time_change
+from homeassistant.util import dt as dt_util
 
 from .base_coordinator import HockeyBaseCoordinator
 from .const import (
     AHL_GAME_URL,
+    CONF_NOTIFY_GAMEDAY_ENABLED,
+    CONF_NOTIFY_GAMEDAY_TARGETS,
+    CONF_NOTIFY_GAMEDAY_TIME,
     CONF_NOTIFY_GOAL_ENABLED,
     CONF_NOTIFY_GOAL_TARGETS,
     CONF_NOTIFY_LEAD_ENABLED,
@@ -26,6 +31,7 @@ from .const import (
     CONF_NOTIFY_WIN_ENABLED,
     CONF_NOTIFY_WIN_TARGETS,
     CONF_TEAM_ID,
+    DEFAULT_GAMEDAY_TIME,
     FINAL_DISPLAY_SECONDS,
     GAME_STATE_FINAL,
     GAME_STATE_LIVE,
@@ -101,6 +107,14 @@ def reconcile_scores(data: dict, by_abbrev: bool = False) -> dict:
     return data
 
 
+def _is_on_local_date(start: datetime, day: date) -> bool:
+    # The parse helpers fall back to datetime.min, which can't be shifted to a
+    # timezone west of UTC — treat it as "not today" instead of overflowing.
+    if start.year <= 1:
+        return False
+    return dt_util.as_local(start).date() == day
+
+
 def _period_label(period: int) -> str:
     if period <= 3:
         return {1: "1st", 2: "2nd", 3: "3rd"}.get(period, f"P{period}")
@@ -139,7 +153,10 @@ class HockeyCoordinator(HockeyBaseCoordinator):
         self._notif_opp_goal_count: int = 0
         self._notif_lead: str | None = None  # "us" | "them" | "tied"
         self._notif_period_sent: int = 0
-
+        # Game-day reminder: daily timer at the configured local time, plus the
+        # local date it last fired so re-arming the timer can't send it twice.
+        self._gameday_unsub: CALLBACK_TYPE | None = None
+        self._notif_gameday_sent_date: date | None = None
 
     def clear_schedule_cache(self) -> None:
         """Force the next update to re-fetch schedule/logo data from the API."""
@@ -1048,6 +1065,93 @@ class HockeyCoordinator(HockeyBaseCoordinator):
                     title, msg = f"Final: {our_team} {our_score}–{opp_score}", f"Final: {score_line}."
                 await self._send_notifications(targets, title, msg, data=score_tag)
             self._notif_win_sent_id = game_id
+
+    # ------------------------------------------------------------------
+    # Game-day reminder
+    # ------------------------------------------------------------------
+
+    @callback
+    def async_schedule_gameday(self) -> None:
+        """(Re)arm the daily game-day check at the configured time.
+
+        Called at setup and whenever the entry's options change, so a new time or
+        toggle takes effect without reloading the integration.
+        """
+        self.async_cancel_gameday()
+        opts = self._notif_opts()
+        if not opts.get(CONF_NOTIFY_GAMEDAY_ENABLED, NOTIFY_ENABLED_DEFAULTS[CONF_NOTIFY_GAMEDAY_ENABLED]):
+            return
+        at = dt_util.parse_time(str(opts.get(CONF_NOTIFY_GAMEDAY_TIME) or DEFAULT_GAMEDAY_TIME))
+        if at is None:
+            _LOGGER.warning("Invalid game day notification time: %s", opts.get(CONF_NOTIFY_GAMEDAY_TIME))
+            return
+        self._gameday_unsub = async_track_time_change(
+            self.hass, self._async_gameday_check, hour=at.hour, minute=at.minute, second=at.second
+        )
+
+    @callback
+    def async_cancel_gameday(self) -> None:
+        if self._gameday_unsub:
+            self._gameday_unsub()
+            self._gameday_unsub = None
+
+    async def _async_gameday_check(self, now: datetime) -> None:
+        """Send the game-day reminder if the tracked team plays today (local date)."""
+        today = dt_util.as_local(now).date()
+        if self._notif_gameday_sent_date == today:
+            return
+        targets = self._parse_targets(self._notif_opts().get(CONF_NOTIFY_GAMEDAY_TARGETS, []))
+        if not targets:
+            return
+        games = await self._todays_games(today)
+        if not games:
+            _LOGGER.debug("No %s game today; skipping game day notification", self.team_id)
+            return
+        self._notif_gameday_sent_date = today
+        lines = []
+        for g in games:
+            start = dt_util.as_local(g["start"])
+            when = f"{start:%I:%M %p}".lstrip("0")
+            line = f"{g['team']} {'vs' if g['is_home'] else '@'} {g['opponent']} at {when}"
+            if g["venue"]:
+                line += f" ({g['venue']})"
+            lines.append(line)
+        await self._send_notifications(targets, "Hockey: Game Day", "\n".join(lines))
+
+    async def _todays_games(self, today: date) -> list[dict[str, Any]]:
+        """Tracked team's games starting on `today` in HA's time zone, earliest first."""
+        games: list[dict[str, Any]] = []
+        if self.league == LEAGUE_NHL:
+            for g in await self._get_nhl_schedule_cached():
+                start = self._nhl_parse_dt(g)
+                if not _is_on_local_date(start, today):
+                    continue
+                home, away = g.get("homeTeam", {}), g.get("awayTeam", {})
+                is_home = home.get("abbrev") == self.team_id
+                games.append({
+                    "start": start,
+                    "is_home": is_home,
+                    "team": self._nhl_full_name(home if is_home else away),
+                    "opponent": self._nhl_full_name(away if is_home else home),
+                    "venue": g.get("venue", {}).get("default", ""),
+                })
+        else:
+            await self._get_ht_schedule_cached()
+            for g in self._schedule_cache or []:
+                start = self._ht_parse_dt(g)
+                if not _is_on_local_date(start, today):
+                    continue
+                home = f"{g.get('home_team_city','')} {g.get('home_team_nickname','')}".strip()
+                away = f"{g.get('visiting_team_city','')} {g.get('visiting_team_nickname','')}".strip()
+                is_home = str(g.get("home_team", "")) == self.team_id
+                games.append({
+                    "start": start,
+                    "is_home": is_home,
+                    "team": home if is_home else away,
+                    "opponent": away if is_home else home,
+                    "venue": g.get("venue_name", ""),
+                })
+        return sorted(games, key=lambda g: g["start"])
 
     @staticmethod
     def _goal_line(goal: dict) -> str:

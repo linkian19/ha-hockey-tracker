@@ -58,6 +58,9 @@
         "title": "Hockey Tracker — Notifications",
         "description": "Configure push notifications for game events. Enable a type with the toggle, then select one or more notification targets. A type sends nothing until it has at least one target.",
         "data": {
+          "notify_gameday_enabled": "Game Day Notifications",
+          "notify_gameday_targets": "Game Day Notification Targets",
+          "notify_gameday_time": "Game Day Notification Time",
           "notify_pregame_enabled": "Pre-Game Notifications",
           "notify_pregame_targets": "Pre-Game Notification Targets",
           "notify_goal_enabled": "Goal Notifications",
@@ -72,6 +75,9 @@
           "notify_win_targets": "Final Score Notification Targets"
         },
         "data_description": {
+          "notify_gameday_enabled": "Send a reminder at a set time on days the tracked team plays. Nothing is sent on days without a game.",
+          "notify_gameday_targets": "Which notify services receive the game day reminder.",
+          "notify_gameday_time": "Time of day (Home Assistant's time zone) to send the game day reminder.",
           "notify_pregame_enabled": "Send a reminder approximately 30 minutes before puck drop.",
           "notify_pregame_targets": "Which notify services receive the pre-game reminder.",
           "notify_goal_enabled": "Send an alert each time the tracked team scores a goal.",
