@@ -24,6 +24,7 @@ from custom_components.hockey_tracker.const import (
     GAME_STATE_FINAL,
     GAME_STATE_LIVE,
     GAME_STATE_NONE,
+    PRE_WINDOW_HOURS,
 )
 from custom_components.hockey_tracker.coordinator import HockeyCoordinator, reconcile_scores
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -136,3 +137,21 @@ async def test_playoff_entry_setup(hass: HomeAssistant) -> None:
     state = hass.states.async_all("sensor")[0]
     assert state.state == GAME_STATE_NONE
     assert state.attributes["league"] == "ECHL"
+
+
+async def test_pre_only_within_window(hass: HomeAssistant, team_entry) -> None:
+    """A scheduled game becomes the active PRE game only within PRE_WINDOW_HOURS."""
+    team_entry.add_to_hass(hass)
+    coord = HockeyCoordinator(hass, team_entry)
+    now = datetime.now(timezone.utc)
+
+    def _ht(hours: float) -> dict:
+        return {"GameStatus": "1", "GameDateISO8601": (now + timedelta(hours=hours)).isoformat()}
+
+    def _nhl(hours: float) -> dict:
+        return {"gameState": "FUT", "startTimeUTC": (now + timedelta(hours=hours)).isoformat()}
+
+    assert coord._ht_find_active([_ht(PRE_WINDOW_HOURS + 1)]) is None
+    assert coord._ht_find_active([_ht(PRE_WINDOW_HOURS - 0.5)]) is not None
+    assert coord._nhl_find_active([_nhl(PRE_WINDOW_HOURS + 1)]) is None
+    assert coord._nhl_find_active([_nhl(PRE_WINDOW_HOURS - 0.5)]) is not None
