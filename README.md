@@ -45,13 +45,18 @@ A [Home Assistant](https://www.home-assistant.io/) custom integration that track
 
 Requires Home Assistant **2024.11** or newer.
 
-### HACS (recommended)
+### Marketplace (recommended)
 
-1. In Home Assistant, open **HACS → Integrations**
-2. Click the three-dot menu → **Custom repositories**
-3. Add `https://github.com/linkian19/ha-hockey-tracker` with category **Integration**
-4. Search for **Hockey Tracker** and install
-5. Restart Home Assistant
+Home Assistant 2026.11 replaced HACS with the built-in **Marketplace**. Hockey Tracker is a custom repository:
+
+1. In Home Assistant, open **Settings → Marketplace**
+2. Select **Add from link** and enter `https://github.com/linkian19/ha-hockey-tracker`
+3. Select **Install** — setup starts straight away, no restart needed
+4. Updates appear under **Settings → Updates**; after updating, restart Home Assistant when the repair prompts you
+
+The Marketplace asks you to connect a GitHub account (a one-time device sign-in) the first time you add a custom repository.
+
+> On Home Assistant versions before 2026.11, add the same URL under **HACS → ⋮ → Custom repositories** with category **Integration** instead.
 
 ### Manual
 
@@ -391,10 +396,10 @@ The 5-minute interval after a scheduled start time covers a brief scoreboard lag
 ## Troubleshooting
 
 **Notification settings show raw key names like `notify_win_enabled`**
-Home Assistant loads custom integration translations at startup, not at reload time. After installing or updating via HACS, a full HA restart is required — go to **Settings → System → Restart**. A simple integration reload is not sufficient.
+Home Assistant loads custom integration translations at startup, not at reload time. After updating, a full HA restart is required — go to **Settings → System → Restart**. A simple integration reload is not sufficient.
 
 **Win/final notification fired for an old game after updating**
-Updating via HACS reloads the integration and resets in-memory notification state. The final-score notification includes a 12-hour recency guard (v1.3.8+), and since v1.10.0 a game first seen already FINAL is never announced.
+Updating the integration restarts it and resets in-memory notification state. The final-score notification includes a 12-hour recency guard (v1.3.8+), and since v1.10.0 a game first seen already FINAL is never announced.
 
 **Goal alerts replayed after a restart or reload during a game**
 Fixed in v1.10.0 — in-game alert state is baselined the first time a game is seen.
