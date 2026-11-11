@@ -170,6 +170,12 @@ SCAN_INTERVAL_IDLE = 7200
 # Server-side; card relies entirely on this window.
 FINAL_DISPLAY_SECONDS = 7200  # 2 hours
 
+# A scheduled game only becomes the active PRE game this close to puck drop.
+# Further out the sensor stays NO_GAME and the game is reported in next_game;
+# this also keeps far-future games (e.g. next season's opener on the NHL
+# off-season scoreboard) from showing as PRE.
+PRE_WINDOW_HOURS = 3
+
 # Schedule cache TTL (seconds)
 SCHEDULE_CACHE_TTL = 3600
 

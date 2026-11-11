@@ -167,10 +167,10 @@ Each configured team creates one sensor entity. The state reflects the current g
 
 | State | Meaning |
 |-------|---------|
-| `PRE` | Game scheduled but not yet started |
+| `PRE` | Game starts within the next 3 hours |
 | `LIVE` | Game currently in progress |
 | `FINAL` | Game has ended (shown for up to 2 hours after the final horn) |
-| `NO_GAME` | No active or recent game — next game info is in attributes |
+| `NO_GAME` | No active or recent game, and the next game is more than 3 hours away — next game info is in attributes |
 
 ### Attributes
 
@@ -287,7 +287,7 @@ The sensor state reflects the most relevant active game for any followed team (L
 
 | State | Meaning |
 |-------|---------|
-| `PRE` | A followed team's game starts within 35 minutes |
+| `PRE` | A followed team's game starts within the next 3 hours |
 | `LIVE` | A followed team's game is in progress |
 | `FINAL` | A followed team's game just ended (shown for up to 2 hours) |
 | `NO_GAME` | No followed team has an active or recent game |
@@ -362,7 +362,7 @@ The integration automatically adjusts how often it polls based on game state:
 |-----------|----------|
 | Game in progress, end of regulation (P3 at 0:00) or any OT period | 15 seconds |
 | Game in progress (LIVE) | 30 seconds |
-| Game today, not yet started (PRE) | 5 minutes |
+| Game starts within 3 hours (PRE) | 5 minutes |
 | Game just ended (FINAL) | 15 minutes |
 | Scheduled start time just passed, game not yet visible on live feed | 5 minutes |
 | Next game within 6 hours | 15 minutes |

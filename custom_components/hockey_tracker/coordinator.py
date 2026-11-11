@@ -48,6 +48,7 @@ from .const import (
     NHL_LIVE_STATES,
     NHL_PRE_STATES,
     NOTIFY_ENABLED_DEFAULTS,
+    PRE_WINDOW_HOURS,
     PWHL_GAME_URL,
     RECENT_GAMES_MAX,
     SCAN_INTERVAL_FINAL,
@@ -395,11 +396,11 @@ class HockeyCoordinator(HockeyBaseCoordinator):
         # 8-hour lookback from game start time accounts for game duration: a game
         # starting at 23:00 UTC that runs 3 hours ends at 02:00 UTC, and checking
         # at 04:00 UTC would put the start time outside a 4-hour window.
-        # 24-hour forward cap on PRE games prevents a far-future scheduled game
-        # from showing as PRE-GAME instead of the NO_GAME + upcoming widget.
+        # PRE_WINDOW_HOURS forward cap: games further out stay NO_GAME with the
+        # game reported in next_game.
         now = datetime.now(timezone.utc)
         cutoff = now - timedelta(hours=8)
-        pre_cutoff = now + timedelta(hours=24)
+        pre_cutoff = now + timedelta(hours=PRE_WINDOW_HOURS)
         live = None
         recent_final = None
         pre = None
@@ -676,12 +677,12 @@ class HockeyCoordinator(HockeyBaseCoordinator):
         finals = [g for g in team_games if g.get("gameState") in NHL_FINAL_STATES]
         if finals:
             return max(finals, key=lambda g: g.get("startTimeUTC") or g.get("gameDate") or "")
-        # Only return PRE/FUT games within 24 hours — the off-season scoreboard can
-        # return next season's October games as FUT months before they start.
+        # Only return PRE/FUT games within PRE_WINDOW_HOURS — the off-season scoreboard
+        # can return next season's October games as FUT months before they start.
         for g in team_games:
             if g.get("gameState") in NHL_PRE_STATES:
                 hours = self._hours_until(g.get("startTimeUTC") or g.get("gameDate", ""))
-                if hours is not None and hours <= 24:
+                if hours is not None and hours <= PRE_WINDOW_HOURS:
                     return g
         return None
 

@@ -30,6 +30,7 @@ from .const import (
     NHL_LIVE_STATES,
     NHL_PRE_STATES,
     NOTIFY_ENABLED_DEFAULTS,
+    PRE_WINDOW_HOURS,
     SCAN_INTERVAL_FINAL,
     SCAN_INTERVAL_GAME_ENDING,
     SCAN_INTERVAL_GAME_SOON,
@@ -376,13 +377,13 @@ class PlayoffCoordinator(HockeyBaseCoordinator):
         )
         if final:
             return final
-        # Only return PRE/FUT games within 24 hours — off-season scoreboards can
-        # return next season's October games as FUT months before they start.
+        # Only return PRE/FUT games within PRE_WINDOW_HOURS — off-season scoreboards
+        # can return next season's October games as FUT months before they start.
         now = datetime.now(timezone.utc)
         for g in games:
             if g.get("gameState") in NHL_PRE_STATES and self._nhl_team_in_game(g):
                 hours = (self._nhl_parse_dt(g) - now).total_seconds() / 3600
-                if hours <= 24:
+                if hours <= PRE_WINDOW_HOURS:
                     return g
         return None
 
@@ -871,11 +872,10 @@ class PlayoffCoordinator(HockeyBaseCoordinator):
         # 8-hour lookback from game start time accounts for game duration — a game
         # starting at 23:00 UTC that runs 3 hours ends at 02:00 UTC, and a 4-hour
         # window would miss it entirely by 04:00 UTC.
-        # 24-hour forward cap on PRE games prevents a far-future scheduled game
-        # from showing as PRE-GAME instead of the NO_GAME + upcoming widget.
+        # PRE_WINDOW_HOURS forward cap: games further out stay NO_GAME.
         now = datetime.now(timezone.utc)
         cutoff = now - timedelta(hours=8)
-        pre_cutoff = now + timedelta(hours=24)
+        pre_cutoff = now + timedelta(hours=PRE_WINDOW_HOURS)
         live = next(
             (g for g in scorebar
              if str(g.get("GameStatus", "")) not in ("1", "4") and self._ht_team_in_game(g)
