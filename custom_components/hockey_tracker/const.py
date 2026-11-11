@@ -139,6 +139,12 @@ CONF_NOTIFY_LEAD_ENABLED = "notify_lead_enabled"
 CONF_NOTIFY_LEAD_TARGETS = "notify_lead_targets"
 CONF_NOTIFY_PERIOD_ENABLED = "notify_period_enabled"
 CONF_NOTIFY_PERIOD_TARGETS = "notify_period_targets"
+CONF_NOTIFY_GAMEDAY_ENABLED = "notify_gameday_enabled"
+CONF_NOTIFY_GAMEDAY_TARGETS = "notify_gameday_targets"
+CONF_NOTIFY_GAMEDAY_TIME = "notify_gameday_time"
+
+# Local time the game-day reminder goes out when no time has been chosen
+DEFAULT_GAMEDAY_TIME = "09:00:00"
 
 # Defaults for the enable toggles (a type still needs targets before it sends anything)
 NOTIFY_ENABLED_DEFAULTS = {
@@ -148,6 +154,7 @@ NOTIFY_ENABLED_DEFAULTS = {
     CONF_NOTIFY_OPP_GOAL_ENABLED: False,
     CONF_NOTIFY_LEAD_ENABLED: False,
     CONF_NOTIFY_PERIOD_ENABLED: True,
+    CONF_NOTIFY_GAMEDAY_ENABLED: False,
 }
 
 # Polling intervals (seconds)
