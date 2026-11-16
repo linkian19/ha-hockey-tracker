@@ -9,7 +9,7 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
-from .base_coordinator import HockeyBaseCoordinator
+from .base_coordinator import GoalKey, HockeyBaseCoordinator, take_new_goals
 from .coordinator import _to_int, reconcile_scores
 from .const import (
     CONF_FOLLOWED_TEAMS,
@@ -70,7 +70,7 @@ class PlayoffCoordinator(HockeyBaseCoordinator):
         # Notification state per followed team
         self._notif_pregame_sent: dict[str, str] = {}   # team_id → game_id
         self._notif_win_sent: dict[str, str] = {}        # team_id → game_id
-        self._notif_goal_count: dict[str, int] = {}      # team_id → goal count
+        self._notif_goals_announced: dict[str, list[GoalKey]] = {}  # team_id → announced goals
         self._notif_goal_game_id: dict[str, str] = {}    # team_id → game_id
 
     def clear_schedule_cache(self) -> None:
@@ -1151,7 +1151,8 @@ class PlayoffCoordinator(HockeyBaseCoordinator):
             # after an HA restart or reload mid-game): record what has already happened
             # without announcing it.
             self._notif_goal_game_id[our_id] = game_id
-            self._notif_goal_count[our_id] = len(our_goals)
+            self._notif_goals_announced[our_id] = []
+            take_new_goals(our_goals, self._notif_goals_announced[our_id])
             if state == GAME_STATE_FINAL:
                 for team_id in (data.get("home_team_id"), data.get("away_team_id")):
                     if str(team_id or "") in self.followed_team_ids:
@@ -1162,9 +1163,11 @@ class PlayoffCoordinator(HockeyBaseCoordinator):
         # Goal
         if state == GAME_STATE_LIVE:
             targets = self._parse_targets(opts.get(CONF_NOTIFY_GOAL_TARGETS, [])) if opts.get(CONF_NOTIFY_GOAL_ENABLED) else []
-            prev = self._notif_goal_count.get(our_id, 0)
-            if targets and len(our_goals) > prev:
-                for goal in our_goals[:len(our_goals) - prev]:
+            # Matched by period/team/time so a goal that drops out of the feed and
+            # comes back isn't announced twice
+            new_goals = take_new_goals(our_goals, self._notif_goals_announced.setdefault(our_id, []))
+            if targets:
+                for goal in new_goals:
                     scorer = goal.get("player_name", "")
                     tag = " (PP)" if goal.get("is_power_play") else " (SH)" if goal.get("is_short_handed") else " (EN)" if goal.get("is_empty_net") else ""
                     # Use the goal's team_abbrev to get the correct team name
@@ -1175,8 +1178,6 @@ class PlayoffCoordinator(HockeyBaseCoordinator):
                     if score_str:
                         msg += f" | {score_str}"
                     await self._send_notifications(targets, f"GOAL! {scoring_team} scores!", msg)
-            # Always resync so a goal removed on review doesn't swallow the next one
-            self._notif_goal_count[our_id] = len(our_goals)
 
         # Final score — win or lose. Prefer the winning followed team (handles the
         # both-teams-followed case); otherwise report the loss for the followed team.

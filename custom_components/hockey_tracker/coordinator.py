@@ -12,7 +12,7 @@ from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.helpers.event import async_track_time_change
 from homeassistant.util import dt as dt_util
 
-from .base_coordinator import HockeyBaseCoordinator
+from .base_coordinator import GoalKey, HockeyBaseCoordinator, take_new_goals
 from .const import (
     AHL_GAME_URL,
     CONF_NOTIFY_GAMEDAY_ENABLED,
@@ -150,8 +150,8 @@ class HockeyCoordinator(HockeyBaseCoordinator):
         # In-game notification state, baselined the first time each game is seen so
         # an HA restart or integration reload mid-game doesn't replay earlier events.
         self._notif_game_id: str | None = None
-        self._notif_goal_count: int = 0
-        self._notif_opp_goal_count: int = 0
+        self._notif_goals_announced: list[GoalKey] = []
+        self._notif_opp_goals_announced: list[GoalKey] = []
         self._notif_lead: str | None = None  # "us" | "them" | "tied"
         self._notif_period_sent: int = 0
         # Game-day reminder: daily timer at the configured local time, plus the
@@ -990,8 +990,10 @@ class HockeyCoordinator(HockeyBaseCoordinator):
             # restart or reload mid-game): record what has already happened without
             # announcing it.
             self._notif_game_id = game_id
-            self._notif_goal_count = len(our_goals)
-            self._notif_opp_goal_count = len(opp_goals)
+            self._notif_goals_announced = []
+            self._notif_opp_goals_announced = []
+            take_new_goals(our_goals, self._notif_goals_announced)
+            take_new_goals(opp_goals, self._notif_opp_goals_announced)
             self._notif_lead = lead
             self._notif_period_sent = period if in_intermission else max(period - 1, 0)
             if state == GAME_STATE_FINAL:
@@ -1000,23 +1002,21 @@ class HockeyCoordinator(HockeyBaseCoordinator):
                 return
 
         if state == GAME_STATE_LIVE:
-            # Goal notification: one per new tracked-team goal
-            if len(our_goals) > self._notif_goal_count:
-                targets = _enabled(CONF_NOTIFY_GOAL_ENABLED, CONF_NOTIFY_GOAL_TARGETS)
-                # New goals are at the front of the newest-first sorted list
-                for goal in our_goals[:len(our_goals) - self._notif_goal_count] if targets else []:
-                    msg = self._goal_line(goal) + (f" | {our_score}–{opp_score}" if lead else "")
-                    await self._send_notifications(targets, f"GOAL! {our_team} scores!", msg)
-            # Always resync so a goal removed on review doesn't swallow the next one
-            self._notif_goal_count = len(our_goals)
+            # Goal notification: one per goal not announced before (matched by
+            # period/team/time, so a goal that drops out of the feed and comes back
+            # isn't announced twice)
+            new_goals = take_new_goals(our_goals, self._notif_goals_announced)
+            targets = _enabled(CONF_NOTIFY_GOAL_ENABLED, CONF_NOTIFY_GOAL_TARGETS) if new_goals else []
+            for goal in new_goals if targets else []:
+                msg = self._goal_line(goal) + (f" | {our_score}–{opp_score}" if lead else "")
+                await self._send_notifications(targets, f"GOAL! {our_team} scores!", msg)
 
-            # Opponent goal notification: one per new opponent goal
-            if len(opp_goals) > self._notif_opp_goal_count:
-                targets = _enabled(CONF_NOTIFY_OPP_GOAL_ENABLED, CONF_NOTIFY_OPP_GOAL_TARGETS)
-                for goal in opp_goals[:len(opp_goals) - self._notif_opp_goal_count] if targets else []:
-                    msg = self._goal_line(goal) + (f" | {our_score}–{opp_score}" if lead else "")
-                    await self._send_notifications(targets, f"{opp_team} scores", msg)
-            self._notif_opp_goal_count = len(opp_goals)
+            # Opponent goal notification: same matching
+            new_goals = take_new_goals(opp_goals, self._notif_opp_goals_announced)
+            targets = _enabled(CONF_NOTIFY_OPP_GOAL_ENABLED, CONF_NOTIFY_OPP_GOAL_TARGETS) if new_goals else []
+            for goal in new_goals if targets else []:
+                msg = self._goal_line(goal) + (f" | {our_score}–{opp_score}" if lead else "")
+                await self._send_notifications(targets, f"{opp_team} scores", msg)
 
             # Lead change / tie notification
             if lead is not None and lead != self._notif_lead:
