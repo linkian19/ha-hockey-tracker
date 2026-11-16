@@ -427,7 +427,7 @@ This integration was inspired by [ha-teamtracker](https://github.com/vasqued2/ha
 
 Please open an issue at [github.com/linkian19/ha-hockey-tracker/issues](https://github.com/linkian19/ha-hockey-tracker/issues).
 
-Pull requests run hassfest, HACS validation, `pytest` and `ruff check` (rules pinned in `ruff.toml`). To check locally:
+Pull requests run hassfest, HACS validation, `pytest` and `ruff check` (rules pinned in `ruff.toml`). Tests need Python 3.14 (current Home Assistant releases require it) on Linux or WSL. To check locally:
 
 ```bash
 pip install -r requirements_test.txt ruff==0.17.3
