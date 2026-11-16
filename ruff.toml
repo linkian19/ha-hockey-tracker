@@ -1,0 +1,17 @@
+# Lint config — pinned so local runs and CI check the same rules.
+target-version = "py313"  # minimum Python supported by current Home Assistant
+line-length = 120
+
+[lint]
+select = [
+    "E4", "E7", "E9", "F",  # pycodestyle errors, pyflakes
+    "I",                    # import sorting
+    "UP",                   # pyupgrade
+    "BLE",                  # blind except
+    "FURB",                 # refurb
+    "SIM",                  # simplify
+]
+
+[lint.isort]
+force-sort-within-sections = true
+known-first-party = ["custom_components"]

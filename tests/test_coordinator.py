@@ -1,14 +1,15 @@
 """Score reconciliation, notification state machine and shared notification delivery."""
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
-
-import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant, ServiceCall
+from pytest_homeassistant_custom_component.common import MockConfigEntry
+import voluptuous as vol
 
+from custom_components.hockey_tracker.base_coordinator import take_new_goals
 from custom_components.hockey_tracker.const import (
     CONF_API_KEY,
     CONF_ENTRY_TYPE,
@@ -28,9 +29,7 @@ from custom_components.hockey_tracker.const import (
     GAME_STATE_NONE,
     PRE_WINDOW_HOURS,
 )
-from custom_components.hockey_tracker.base_coordinator import take_new_goals
 from custom_components.hockey_tracker.coordinator import HockeyCoordinator, reconcile_scores
-from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from .conftest import empty_game
 
@@ -75,7 +74,7 @@ def _live(goals: list[dict], home: int, away: int, state: str = GAME_STATE_LIVE)
         game_state=state, game_id="g1", is_home=True,
         home_team="Kansas City Mavericks", away_team="Tulsa Oilers",
         home_score=home, away_score=away, period=2, game_events=goals,
-        start_time=(datetime.now(timezone.utc) - timedelta(hours=2)).isoformat(),
+        start_time=(datetime.now(UTC) - timedelta(hours=2)).isoformat(),
     )
 
 
@@ -205,7 +204,7 @@ async def test_pre_only_within_window(hass: HomeAssistant, team_entry) -> None:
     """A scheduled game becomes the active PRE game only within PRE_WINDOW_HOURS."""
     team_entry.add_to_hass(hass)
     coord = HockeyCoordinator(hass, team_entry)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     def _ht(hours: float) -> dict:
         return {"GameStatus": "1", "GameDateISO8601": (now + timedelta(hours=hours)).isoformat()}

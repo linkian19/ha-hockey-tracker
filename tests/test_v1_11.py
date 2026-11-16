@@ -1,12 +1,11 @@
 """Entry migration, force_refresh validation, diagnostics and options flow."""
 from __future__ import annotations
 
-import pytest
-
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import entity_registry as er
+import pytest
 
 from custom_components.hockey_tracker.const import (
     CONF_NOTIFY_GOAL_ENABLED,
