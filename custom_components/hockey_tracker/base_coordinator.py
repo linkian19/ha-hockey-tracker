@@ -8,14 +8,13 @@ subclasses because it genuinely differs (one team vs. a set of followed teams).
 from __future__ import annotations
 
 from abc import abstractmethod
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 import json
 import logging
 import re
 from typing import Any
 
 import aiohttp
-
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -213,18 +212,18 @@ class HockeyBaseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         raw = game.get("GameDateISO8601", "")
         try:
             dt = datetime.fromisoformat(raw)
-            return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+            return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
         except (ValueError, TypeError):
-            return datetime.min.replace(tzinfo=timezone.utc)
+            return datetime.min.replace(tzinfo=UTC)
 
     @staticmethod
     def _nhl_parse_dt(game: dict) -> datetime:
         raw = game.get("startTimeUTC") or game.get("gameDate", "")
         try:
-            dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-            return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+            dt = datetime.fromisoformat(raw)
+            return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
         except (ValueError, TypeError):
-            return datetime.min.replace(tzinfo=timezone.utc)
+            return datetime.min.replace(tzinfo=UTC)
 
     @staticmethod
     def _upscale_ht_logo(url: str | None) -> str | None:

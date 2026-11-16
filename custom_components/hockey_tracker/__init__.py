@@ -3,8 +3,6 @@ from __future__ import annotations
 
 import logging
 
-import voluptuous as vol
-
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall, callback
@@ -12,6 +10,7 @@ from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.typing import ConfigType
+import voluptuous as vol
 
 from .const import CONF_ENTRY_TYPE, CONF_LEAGUE, CONF_TEAM_ID, DOMAIN, ENTRY_TYPE_PLAYOFF
 from .coordinator import HockeyCoordinator

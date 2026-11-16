@@ -4,10 +4,13 @@ from __future__ import annotations
 from datetime import datetime
 from unittest.mock import patch
 
-import pytest
-
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
+import pytest
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_fire_time_changed,
+)
 
 from custom_components.hockey_tracker.const import (
     CONF_API_KEY,
@@ -25,10 +28,6 @@ from custom_components.hockey_tracker.const import (
     ENTRY_TYPE_TEAM,
 )
 from custom_components.hockey_tracker.coordinator import HockeyCoordinator
-from pytest_homeassistant_custom_component.common import (
-    MockConfigEntry,
-    async_fire_time_changed,
-)
 
 from .conftest import empty_game
 from .test_coordinator import _register_notify

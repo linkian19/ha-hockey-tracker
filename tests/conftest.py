@@ -4,6 +4,7 @@ from __future__ import annotations
 from unittest.mock import patch
 
 import pytest
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.hockey_tracker.const import (
     CONF_API_KEY,
@@ -15,7 +16,6 @@ from custom_components.hockey_tracker.const import (
     ENTRY_TYPE_TEAM,
     GAME_STATE_NONE,
 )
-from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 
 @pytest.fixture(autouse=True)

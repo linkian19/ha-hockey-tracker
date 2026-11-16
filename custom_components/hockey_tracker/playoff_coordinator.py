@@ -1,16 +1,14 @@
 """Playoff bracket coordinator for Hockey Tracker."""
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 import logging
 from typing import Any
-
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
 from .base_coordinator import GoalKey, HockeyBaseCoordinator, take_new_goals
-from .coordinator import _to_int, reconcile_scores
 from .const import (
     CONF_FOLLOWED_TEAMS,
     CONF_NOTIFY_GOAL_ENABLED,
@@ -40,6 +38,7 @@ from .const import (
     SCAN_INTERVAL_PRE,
     SCHEDULE_CACHE_TTL,
 )
+from .coordinator import _to_int, reconcile_scores
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -107,7 +106,7 @@ class PlayoffCoordinator(HockeyBaseCoordinator):
                 data["game_state"] = GAME_STATE_NONE
             elif self._game_final_id != game_id:
                 self._game_final_id = game_id
-                self._game_final_at = datetime.now(timezone.utc)
+                self._game_final_at = datetime.now(UTC)
                 self._game_final_data = {
                     k: data.get(k) for k in (
                         "game_id", "start_time", "period", "clock",
@@ -117,14 +116,14 @@ class PlayoffCoordinator(HockeyBaseCoordinator):
                     )
                 }
             elif self._game_final_at and (
-                datetime.now(timezone.utc) - self._game_final_at
+                datetime.now(UTC) - self._game_final_at
             ).total_seconds() > FINAL_DISPLAY_SECONDS:
                 # Mark window expired: keep game_id for suppression, clear rest.
                 data["game_state"] = GAME_STATE_NONE
                 self._game_final_at = None
                 self._game_final_data = None
         elif data.get("game_state") == GAME_STATE_NONE and self._game_final_at:
-            elapsed = (datetime.now(timezone.utc) - self._game_final_at).total_seconds()
+            elapsed = (datetime.now(UTC) - self._game_final_at).total_seconds()
             if elapsed <= FINAL_DISPLAY_SECONDS and self._game_final_data:
                 data.update(self._game_final_data)
                 data["game_state"] = GAME_STATE_FINAL
@@ -137,7 +136,7 @@ class PlayoffCoordinator(HockeyBaseCoordinator):
             self._game_final_at = None
             self._game_final_data = None
 
-        data["last_fetched"] = datetime.now(timezone.utc).isoformat()
+        data["last_fetched"] = datetime.now(UTC).isoformat()
         self.update_interval = timedelta(seconds=self._next_interval(data))
         return data
 
@@ -161,10 +160,10 @@ class PlayoffCoordinator(HockeyBaseCoordinator):
         next_game = data.get("next_game")
         if next_game and next_game.get("game_date"):
             try:
-                dt = datetime.fromisoformat(next_game["game_date"].replace("Z", "+00:00"))
+                dt = datetime.fromisoformat(next_game["game_date"])
                 if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=timezone.utc)
-                hours = (dt - datetime.now(timezone.utc)).total_seconds() / 3600
+                    dt = dt.replace(tzinfo=UTC)
+                hours = (dt - datetime.now(UTC)).total_seconds() / 3600
                 if hours <= 0:
                     # Game started recently but not yet visible on scoreboard.
                     return SCAN_INTERVAL_PRE
@@ -181,7 +180,7 @@ class PlayoffCoordinator(HockeyBaseCoordinator):
     # ------------------------------------------------------------------
 
     async def _fetch_nhl_playoffs(self) -> dict[str, Any]:
-        _now = datetime.now(timezone.utc)
+        _now = datetime.now(UTC)
         year = _now.year if _now.month >= 4 else _now.year - 1
         bracket_raw = await self._fetch_json(f"{NHL_API_BASE}/playoff-bracket/{year}")
         scoreboard = await self._fetch_json(f"{NHL_API_BASE}/scoreboard/now")
@@ -379,7 +378,7 @@ class PlayoffCoordinator(HockeyBaseCoordinator):
             return final
         # Only return PRE/FUT games within PRE_WINDOW_HOURS — off-season scoreboards
         # can return next season's October games as FUT months before they start.
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         for g in games:
             if g.get("gameState") in NHL_PRE_STATES and self._nhl_team_in_game(g):
                 hours = (self._nhl_parse_dt(g) - now).total_seconds() / 3600
@@ -452,7 +451,7 @@ class PlayoffCoordinator(HockeyBaseCoordinator):
         return reconcile_scores(result, by_abbrev=True)
 
     async def _get_nhl_schedule_cached(self) -> list[dict]:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         age = (
             (now - self._bracket_cache_time).total_seconds()
             if self._bracket_cache_time else float("inf")
@@ -472,14 +471,14 @@ class PlayoffCoordinator(HockeyBaseCoordinator):
                             logo = t.get("logo")
                             if abbrev and logo:
                                 self._logo_cache[abbrev] = logo.replace("_dark.svg", "_light.svg")
-                except Exception as err:
+                except Exception as err:  # noqa: BLE001 — one team's schedule failing mustn't drop the bracket
                     _LOGGER.debug("NHL schedule fetch failed for %s: %s", team_id, err)
             self._bracket_cache = games
             self._bracket_cache_time = now
         return self._bracket_cache or []
 
     def _nhl_first_upcoming_followed(self, games: list[dict]) -> dict | None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         # 30-min grace period so a game that just started but hasn't appeared on
         # the scoreboard yet still shows as next_game and keeps polls fast.
         upcoming = sorted(
@@ -511,7 +510,7 @@ class PlayoffCoordinator(HockeyBaseCoordinator):
         Also covers the brief period right after a scheduled start time before the
         game appears as LIVE on the scoreboard (30-min grace window).
         """
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         candidates = sorted(
             [g for g in games if self._nhl_team_in_game(g) and self._nhl_parse_dt(g) > now - timedelta(minutes=30)],
             key=self._nhl_parse_dt,
@@ -625,7 +624,7 @@ class PlayoffCoordinator(HockeyBaseCoordinator):
         # Find active game for any followed team
         active_raw = self._ht_find_followed_game(scorebar_games)
         summary = None
-        if active_raw and str(active_raw.get("GameStatus", "")) not in ("1",):
+        if active_raw and str(active_raw.get("GameStatus", "")) != "1":
             game_id = str(active_raw.get("GameID") or active_raw.get("ID") or "")
             if game_id:
                 summary = await self._fetch_ht_game_summary(game_id)
@@ -645,7 +644,7 @@ class PlayoffCoordinator(HockeyBaseCoordinator):
         }
 
     async def _get_ht_playoff_season_id(self) -> str | None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         age = (
             (now - self._season_cache_time).total_seconds()
             if self._season_cache_time else float("inf")
@@ -662,7 +661,7 @@ class PlayoffCoordinator(HockeyBaseCoordinator):
                     self._playoff_season_id = str(season["season_id"])
                     self._season_cache_time = now
                     return self._playoff_season_id
-        except Exception as err:
+        except Exception as err:  # noqa: BLE001 — season lookup is retried on the next poll
             _LOGGER.debug("HockeyTech seasons fetch failed: %s", err)
         return None
 
@@ -670,7 +669,7 @@ class PlayoffCoordinator(HockeyBaseCoordinator):
         try:
             data = await self._fetch_ht({"feed": "modulekit", "view": "schedule", "season_id": season_id})
             return data.get("SiteKit", {}).get("Schedule", [])
-        except Exception as err:
+        except Exception as err:  # noqa: BLE001 — empty schedule is shown until the next poll
             _LOGGER.debug("HockeyTech playoff schedule fetch failed: %s", err)
             return []
 
@@ -683,7 +682,7 @@ class PlayoffCoordinator(HockeyBaseCoordinator):
                 "numberofdaysback": "60",
             })
             return data.get("SiteKit", {}).get("Scorebar", [])
-        except Exception as err:
+        except Exception as err:  # noqa: BLE001 — empty scorebar is shown until the next poll
             _LOGGER.debug("HockeyTech playoff scorebar fetch failed: %s", err)
             return []
 
@@ -873,7 +872,7 @@ class PlayoffCoordinator(HockeyBaseCoordinator):
         # starting at 23:00 UTC that runs 3 hours ends at 02:00 UTC, and a 4-hour
         # window would miss it entirely by 04:00 UTC.
         # PRE_WINDOW_HOURS forward cap: games further out stay NO_GAME.
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         cutoff = now - timedelta(hours=8)
         pre_cutoff = now + timedelta(hours=PRE_WINDOW_HOURS)
         live = next(
@@ -950,7 +949,7 @@ class PlayoffCoordinator(HockeyBaseCoordinator):
         return reconcile_scores(result, by_abbrev=True)
 
     def _ht_first_upcoming_followed(self, schedule: list[dict]) -> dict | None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         # 30-min grace period so a game that just started but hasn't appeared on
         # the scorebar yet still shows as next_game and keeps polls fast.
         upcoming = sorted(
@@ -1044,9 +1043,8 @@ class PlayoffCoordinator(HockeyBaseCoordinator):
             for s in round_obj.get("series", []):
                 if s.get("status") == "active":
                     active_round = max(active_round, rn)
-                elif s.get("status") == "scheduled":
-                    if earliest_scheduled is None or rn < earliest_scheduled:
-                        earliest_scheduled = rn
+                elif s.get("status") == "scheduled" and (earliest_scheduled is None or rn < earliest_scheduled):
+                    earliest_scheduled = rn
         if active_round:
             return active_round
         if earliest_scheduled is not None:
@@ -1055,7 +1053,7 @@ class PlayoffCoordinator(HockeyBaseCoordinator):
 
     @staticmethod
     def _ht_is_today(series: dict, sb_games: list[dict]) -> bool:
-        today = datetime.now(timezone.utc).date()
+        today = datetime.now(UTC).date()
         for g in sb_games:
             if str(g.get("GameStatus", "")) == "1":
                 raw = g.get("GameDateISO8601", "")
@@ -1063,7 +1061,7 @@ class PlayoffCoordinator(HockeyBaseCoordinator):
                     dt = datetime.fromisoformat(raw)
                     # Treat naive timestamps as UTC — consistent with _ht_parse_dt convention
                     if dt.tzinfo is None:
-                        dt = dt.replace(tzinfo=timezone.utc)
+                        dt = dt.replace(tzinfo=UTC)
                     if dt.date() == today:
                         return True
                 except (ValueError, TypeError):
@@ -1124,8 +1122,8 @@ class PlayoffCoordinator(HockeyBaseCoordinator):
             targets = self._parse_targets(opts.get(CONF_NOTIFY_PREGAME_TARGETS, []))
             if targets and state == GAME_STATE_PRE and data.get("start_time"):
                 try:
-                    start = datetime.fromisoformat(data["start_time"].replace("Z", "+00:00"))
-                    mins = (start - datetime.now(timezone.utc)).total_seconds() / 60
+                    start = datetime.fromisoformat(data["start_time"])
+                    mins = (start - datetime.now(UTC)).total_seconds() / 60
                     if 0 <= mins <= 35:
                         await self._send_notifications(targets, "Hockey: Game Starting Soon", f"{our_team} vs {opp_team} starts in {int(mins)} minutes!")
                         self._notif_pregame_sent[our_id] = game_id
@@ -1216,8 +1214,8 @@ class PlayoffCoordinator(HockeyBaseCoordinator):
                     recent = False
                     if start_time:
                         try:
-                            start = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
-                            recent = (datetime.now(timezone.utc) - start).total_seconds() < 43200
+                            start = datetime.fromisoformat(start_time)
+                            recent = (datetime.now(UTC) - start).total_seconds() < 43200
                         except (ValueError, TypeError):
                             pass
                     if recent:

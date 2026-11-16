@@ -1,11 +1,10 @@
 """DataUpdateCoordinator for Hockey Tracker."""
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 import logging
 import re
 from typing import Any
-
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
@@ -197,7 +196,7 @@ class HockeyCoordinator(HockeyBaseCoordinator):
                 data["game_state"] = GAME_STATE_NONE
             elif self._game_final_id != game_id:
                 self._game_final_id = game_id
-                self._game_final_at = datetime.now(timezone.utc)
+                self._game_final_at = datetime.now(UTC)
                 self._last_game_summary = {
                     k: data.get(k) for k in (
                         "game_id", "start_time",
@@ -210,7 +209,7 @@ class HockeyCoordinator(HockeyBaseCoordinator):
                     e for e in data.get("game_events", []) if e.get("type") != "shot"
                 ]
             elif self._game_final_at and (
-                datetime.now(timezone.utc) - self._game_final_at
+                datetime.now(UTC) - self._game_final_at
             ).total_seconds() > FINAL_DISPLAY_SECONDS:
                 # Mark window expired: keep game_id so the suppression branch above
                 # fires on subsequent polls; clear timestamp so it is detectable.
@@ -226,7 +225,7 @@ class HockeyCoordinator(HockeyBaseCoordinator):
             await self._populate_last_game_nhl()
 
         data["last_game_summary"] = self._last_game_summary
-        data["last_fetched"] = datetime.now(timezone.utc).isoformat()
+        data["last_fetched"] = datetime.now(UTC).isoformat()
 
         self.update_interval = timedelta(seconds=self._next_interval(data))
         _LOGGER.debug(
@@ -315,8 +314,8 @@ class HockeyCoordinator(HockeyBaseCoordinator):
         try:
             dt = datetime.fromisoformat(iso_date)
             if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            return (dt - datetime.now(timezone.utc)).total_seconds() / 3600
+                dt = dt.replace(tzinfo=UTC)
+            return (dt - datetime.now(UTC)).total_seconds() / 3600
         except (ValueError, TypeError):
             return None
 
@@ -354,7 +353,7 @@ class HockeyCoordinator(HockeyBaseCoordinator):
 
         # Fetch game summary for live and final games — provides shots and event feed
         summary = None
-        if active and str(active.get("GameStatus", "")) not in ("1",):
+        if active and str(active.get("GameStatus", "")) != "1":
             game_id = str(active.get("GameID") or active.get("ID") or "")
             if game_id:
                 summary = await self._fetch_ht_game_summary(game_id)
@@ -398,7 +397,7 @@ class HockeyCoordinator(HockeyBaseCoordinator):
         # at 04:00 UTC would put the start time outside a 4-hour window.
         # PRE_WINDOW_HOURS forward cap: games further out stay NO_GAME with the
         # game reported in next_game.
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         cutoff = now - timedelta(hours=8)
         pre_cutoff = now + timedelta(hours=PRE_WINDOW_HOURS)
         live = None
@@ -413,9 +412,8 @@ class HockeyCoordinator(HockeyBaseCoordinator):
             elif status == "4" and recent_final is None:
                 if self._ht_parse_dt(g) >= cutoff:
                     recent_final = g
-            elif status == "1" and pre is None:
-                if self._ht_parse_dt(g) <= pre_cutoff:
-                    pre = g
+            elif status == "1" and pre is None and self._ht_parse_dt(g) <= pre_cutoff:
+                pre = g
         return live or recent_final or pre
 
     def _ht_extract_recent(self, team_games: list[dict]) -> list[dict]:
@@ -424,7 +422,7 @@ class HockeyCoordinator(HockeyBaseCoordinator):
         return [self._ht_normalize_recent(g) for g in completed[:RECENT_GAMES_MAX]]
 
     async def _get_ht_schedule_cached(self) -> dict[str, Any] | None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         age = (
             (now - self._schedule_cache_time).total_seconds()
             if self._schedule_cache_time else float("inf")
@@ -442,12 +440,12 @@ class HockeyCoordinator(HockeyBaseCoordinator):
                 "team_id": self.team_id,
             })
             return result.get("SiteKit", {}).get("Schedule", [])
-        except Exception as err:
+        except Exception as err:  # noqa: BLE001 — schedule is optional; keep the cached copy
             _LOGGER.debug("HockeyTech schedule fetch failed: %s", err)
             return self._schedule_cache or []
 
     def _ht_first_upcoming(self, games: list[dict]) -> dict[str, Any] | None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         # 30-min grace period so a game that just started but hasn't appeared on
         # the scorebar yet still shows up as "next game" and keeps polls fast.
         upcoming = sorted(
@@ -687,7 +685,7 @@ class HockeyCoordinator(HockeyBaseCoordinator):
         return None
 
     async def _get_nhl_schedule_cached(self) -> list[dict]:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         age = (
             (now - self._schedule_cache_time).total_seconds()
             if self._schedule_cache_time else float("inf")
@@ -713,7 +711,7 @@ class HockeyCoordinator(HockeyBaseCoordinator):
                     if abbrev and logo:
                         self._logo_cache[abbrev] = logo.replace("_dark.svg", "_light.svg")
             return games
-        except Exception as err:
+        except Exception as err:  # noqa: BLE001 — schedule is optional; keep the cached copy
             _LOGGER.debug("NHL schedule fetch failed: %s", err)
             return self._schedule_cache or []
 
@@ -726,11 +724,11 @@ class HockeyCoordinator(HockeyBaseCoordinator):
                 logo = entry.get("teamLogo", "")
                 if abbrev and logo:
                     self._logo_cache[abbrev] = logo.replace("_dark.svg", "_light.svg")
-        except Exception as err:
+        except Exception as err:  # noqa: BLE001 — logos are cosmetic; keep the cached ones
             _LOGGER.debug("NHL logo cache refresh failed: %s", err)
 
     def _nhl_first_upcoming(self, games: list[dict]) -> dict[str, Any] | None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         # 30-min grace period so a game that just started but hasn't appeared on
         # the scoreboard yet still populates next_game and keeps polls fast.
         upcoming = sorted(
@@ -753,7 +751,7 @@ class HockeyCoordinator(HockeyBaseCoordinator):
         }
 
     def _nhl_extract_recent(self, games: list[dict]) -> list[dict]:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         completed = [
             g for g in games
             if g.get("gameState") in NHL_FINAL_STATES and self._nhl_parse_dt(g) < now
@@ -953,8 +951,8 @@ class HockeyCoordinator(HockeyBaseCoordinator):
             targets = self._parse_targets(opts.get(CONF_NOTIFY_PREGAME_TARGETS, []))
             if targets and state == GAME_STATE_PRE and data.get("start_time"):
                 try:
-                    start = datetime.fromisoformat(data["start_time"].replace("Z", "+00:00"))
-                    mins_until = (start - datetime.now(timezone.utc)).total_seconds() / 60
+                    start = datetime.fromisoformat(data["start_time"])
+                    mins_until = (start - datetime.now(UTC)).total_seconds() / 60
                     if 0 <= mins_until <= 35:
                         msg = f"{our_team} vs {opp_team} starts in {int(mins_until)} minutes!"
                         await self._send_notifications(targets, "Hockey: Game Starting Soon", msg)
@@ -1055,8 +1053,8 @@ class HockeyCoordinator(HockeyBaseCoordinator):
             start_time = data.get("start_time")
             if start_time:
                 try:
-                    start = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
-                    game_is_recent = (datetime.now(timezone.utc) - start).total_seconds() < 43200
+                    start = datetime.fromisoformat(start_time)
+                    game_is_recent = (datetime.now(UTC) - start).total_seconds() < 43200
                 except (ValueError, TypeError):
                     pass
             if targets and game_is_recent:
