@@ -17,6 +17,8 @@ from custom_components.hockey_tracker.const import (
     CONF_LEAGUE,
     CONF_NOTIFY_GOAL_ENABLED,
     CONF_NOTIFY_GOAL_TARGETS,
+    CONF_NOTIFY_OPP_GOAL_ENABLED,
+    CONF_NOTIFY_OPP_GOAL_TARGETS,
     CONF_NOTIFY_WIN_ENABLED,
     CONF_NOTIFY_WIN_TARGETS,
     DOMAIN,
@@ -26,6 +28,7 @@ from custom_components.hockey_tracker.const import (
     GAME_STATE_NONE,
     PRE_WINDOW_HOURS,
 )
+from custom_components.hockey_tracker.base_coordinator import take_new_goals
 from custom_components.hockey_tracker.coordinator import HockeyCoordinator, reconcile_scores
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -104,6 +107,65 @@ async def test_goal_and_final_notifications(hass: HomeAssistant, team_entry) -> 
     assert len(calls) == 2
     assert calls[1].data["title"] == "Kansas City Mavericks Win!"
     assert calls[1].data["data"]["tag"].endswith("_g1_score")
+
+
+def _at(ours: bool, period: int, time: str) -> dict:
+    return {**_goal(ours, 0), "period": period, "time": time}
+
+
+def test_take_new_goals_matching() -> None:
+    announced: list = []
+    a, b = _at(True, 3, "0:59"), _at(True, 3, "6:24")
+    assert take_new_goals([b, a], announced) == [b, a]  # newest first
+    # Same goals again, one with a scorekeeper time correction → nothing new
+    assert take_new_goals([_at(True, 3, "6:30"), a], announced) == []
+    # Different period or team at the same time is a different goal
+    assert len(take_new_goals([b, a, _at(True, 2, "6:24"), _at(False, 3, "6:24")], announced)) == 2
+    # Two real goals seconds apart: the second one is still new
+    assert take_new_goals([_at(True, 3, "6:28"), b, a], announced) == [_at(True, 3, "6:28")]
+    # Identical keys (e.g. NHL shootout goals at 00:00) count separately
+    so: list = []
+    assert len(take_new_goals([_at(True, 5, "00:00")], so)) == 1
+    assert len(take_new_goals([_at(True, 5, "00:00"), _at(True, 5, "00:00")], so)) == 1
+
+
+async def test_goal_dropped_and_restored_not_reannounced(hass: HomeAssistant, team_entry) -> None:
+    """Replays Nov 12 2026 (TUL @ KC, game 25631): the 2nd KC goal left the feed for
+    ~90s and came back. Also covers a failed summary fetch returning no events."""
+    calls = _register_notify(hass)
+    team_entry.add_to_hass(hass)
+    hass.config_entries.async_update_entry(team_entry, options={
+        CONF_NOTIFY_GOAL_ENABLED: True, CONF_NOTIFY_GOAL_TARGETS: ["notify.mobile_app_phone"],
+        CONF_NOTIFY_OPP_GOAL_ENABLED: True, CONF_NOTIFY_OPP_GOAL_TARGETS: ["notify.mobile_app_phone"],
+    })
+    coord = HockeyCoordinator(hass, team_entry)
+    g1, g2 = _at(True, 3, "0:59"), _at(True, 3, "6:24")
+
+    for goals, home in (
+        ([], 0),             # baseline
+        ([g1], 1),           # goal 1 → alert
+        ([g2, g1], 2),       # goal 2 → alert
+        ([g1], 1),           # goal 2 pulled from the feed
+        ([g2, g1], 2),       # goal 2 restored → no alert
+        ([], 2),             # summary fetch failed → no events
+        ([g2, g1], 2),       # events back → no alert
+    ):
+        await coord._maybe_notify(_live(goals, home, 0))
+    await hass.async_block_till_done()
+    assert [c.data["title"] for c in calls] == ["GOAL! Kansas City Mavericks scores!"] * 2
+
+    # Goal 2 genuinely disallowed, then a later goal → still announced
+    await coord._maybe_notify(_live([g1], 1, 0))
+    await coord._maybe_notify(_live([_at(True, 3, "15:00"), g1], 2, 0))
+    # Opponent goal dropping out and returning → announced once
+    tul = _at(False, 3, "17:00")
+    await coord._maybe_notify(_live([tul, _at(True, 3, "15:00"), g1], 2, 1))
+    await coord._maybe_notify(_live([_at(True, 3, "15:00"), g1], 2, 0))
+    await coord._maybe_notify(_live([tul, _at(True, 3, "15:00"), g1], 2, 1))
+    await hass.async_block_till_done()
+    titles = [c.data["title"] for c in calls[2:]]
+    assert titles.count("GOAL! Kansas City Mavericks scores!") == 1
+    assert titles.count("Tulsa Oilers scores") == 1
 
 
 async def test_notification_retries_without_data(hass: HomeAssistant, team_entry) -> None:

@@ -35,6 +35,54 @@ _LOGGER = logging.getLogger(__name__)
 
 _REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=15)
 
+# Two goal records for the same team and period whose in-period times are within
+# this many seconds are treated as the same goal (scorekeeper re-entry/correction).
+GOAL_MATCH_TOLERANCE_SECONDS = 15
+
+GoalKey = tuple[int, str, int]  # (period, team_abbrev, seconds into period)
+
+
+def _goal_key(goal: dict) -> GoalKey:
+    try:
+        period = int(goal.get("period") or 0)
+    except (TypeError, ValueError):
+        period = 0
+    parts = str(goal.get("time") or "").split(":")
+    try:
+        seconds = int(parts[0]) * 60 + int(parts[1]) if len(parts) == 2 else 0
+    except ValueError:
+        seconds = 0
+    return (period, str(goal.get("team_abbrev") or ""), seconds)
+
+
+def take_new_goals(goals: list[dict], announced: list[GoalKey]) -> list[dict]:
+    """Return the goals not yet announced and record them in `announced`.
+
+    Goals are matched by identity (period, team, time) rather than by count, so a
+    goal that briefly drops out of the feed — removed for review, deleted and
+    re-entered by the scorekeeper, or a failed summary fetch returning no events —
+    isn't announced again when it reappears. Each announced key absorbs at most one
+    goal, so distinct goals logged at the same time (e.g. NHL shootout goals at
+    00:00) still count separately. `announced` is never pruned for a game.
+    """
+    available = list(announced)
+    new: list[dict] = []
+    # Oldest first so the earliest goals claim the closest announced keys
+    for goal in sorted(goals, key=_goal_key):
+        period, team, seconds = _goal_key(goal)
+        candidates = [
+            k for k in available
+            if k[0] == period and k[1] == team and abs(k[2] - seconds) <= GOAL_MATCH_TOLERANCE_SECONDS
+        ]
+        if candidates:
+            available.remove(min(candidates, key=lambda k: abs(k[2] - seconds)))
+        else:
+            new.append(goal)
+    announced.extend(_goal_key(g) for g in new)
+    # Callers expect newest-first, matching game_events ordering
+    new.sort(key=_goal_key, reverse=True)
+    return new
+
 
 class HockeyBaseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """Common plumbing for both coordinator types."""
