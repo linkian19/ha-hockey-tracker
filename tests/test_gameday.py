@@ -195,6 +195,12 @@ async def test_options_flow_fields(hass: HomeAssistant, team_entry, mock_ht_fetc
     assert keys[:3] == [
         CONF_NOTIFY_GAMEDAY_ENABLED, CONF_NOTIFY_GAMEDAY_TARGETS, CONF_NOTIFY_GAMEDAY_TIME,
     ]
+    assert keys[-6:] == [
+        "notify_period_enabled", "notify_period_targets",
+        "notify_incident_enabled", "notify_incident_targets",
+        "notify_win_enabled", "notify_win_targets",
+    ]
+    assert keys.index("notify_disallowed_enabled") == keys.index("notify_opp_goal_targets") + 1
     await hass.config_entries.options.async_configure(
         result["flow_id"],
         {CONF_NOTIFY_GAMEDAY_ENABLED: True, CONF_NOTIFY_GAMEDAY_TIME: "08:30:00"},
@@ -221,3 +227,6 @@ async def test_playoff_options_have_no_gameday(hass: HomeAssistant) -> None:
         result = await hass.config_entries.options.async_init(entry.entry_id)
     keys = [str(k) for k in result["data_schema"].schema]
     assert CONF_NOTIFY_GAMEDAY_ENABLED not in keys
+    # Disallowed-goal and incident alerts cover both trackers (v1.13.0)
+    assert "notify_disallowed_enabled" in keys
+    assert "notify_incident_targets" in keys

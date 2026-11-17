@@ -28,7 +28,8 @@ A [Home Assistant](https://www.home-assistant.io/) custom integration that track
 - Adaptive polling — 15 s at end of regulation, 30 s during live games, up to 2 h when no game is near
 - 2-hour post-game FINAL window — final score stays visible well after the buzzer
 - `last_fetched` attribute — always know how fresh the data is
-- Built-in notifications — game day, pre-game, goal, opponent goal, lead change / tie, end-of-period, and final-score alerts via any HA notify service
+- Built-in notifications — game day, pre-game, goal, opponent goal, disallowed goal, lead change / tie, end-of-period, major incident (fights, ejections, majors, penalty shots) and final-score alerts via any HA notify service
+- Disallowed goal detection — goals taken off the board after a coach's challenge, video review or scorekeeper reversal, with the challenge reason for NHL games
 - `hockey_tracker.force_refresh` service — clears cache and hard-pulls fresh data on demand
 
 ### Playoff Tracker
@@ -36,7 +37,7 @@ A [Home Assistant](https://www.home-assistant.io/) custom integration that track
 - Follow up to 4 teams — their series are highlighted in the bracket view
 - Live game data for any followed team during playoff games (scores, period, clock, shots, events)
 - Bracket data clustered into rounds — NHL uses explicit round data from the API; other leagues use a team-conflict algorithm (a team can only appear in one series per round, so East and West conference series are never collapsed into the wrong round)
-- Per-team notifications — pre-game, goal, and final-score alerts for any followed team
+- Per-team notifications — pre-game, goal, and final-score alerts for any followed team, plus disallowed goal and major incident alerts for followed teams' games
 - Adaptive polling identical to the Team Tracker — fast during live games, slow when idle
 
 ---
@@ -113,7 +114,9 @@ After setup, configure alerts at **Settings → Devices & Services → Hockey Tr
 | **Pre-game** | Off | Once per game when puck drop is 35 minutes or fewer away |
 | **Goal** | Off | Each time the tracked team scores during live play — includes scorer, strength (PP/SH/EN), period/time, and current score |
 | **Opponent goal** | Off | Each time the opponent scores during live play — same detail as the goal alert *(Team Tracker only)* |
+| **Disallowed goal** | Off | When a goal by **either** team is taken off the board during live play — e.g. "Tulsa Oilers goal disallowed: Nick Nardella — P1 3:04 · Taken off the board \| 1–0". NHL alerts give the reason: "Overturned on DAL challenge (offside)" |
 | **Lead change / tie** | Off | When either team takes the lead or the game becomes tied — e.g. "Wichita Thunder take the lead", "Tie game" *(Team Tracker only)* |
+| **Major incident** | Off | Fights, ejections (game misconduct, match or gross misconduct), other major penalties and penalty shots, for either team, during live play — e.g. "Fight: Sam Lipkin (ALN) vs Zachary Murray (TUL) — P1 19:48" |
 | **End of period** | **On** | Once at the start of each intermission — score and shots, e.g. "End of 2nd: Mavericks 1, Thunder 2 · Shots 18–22". The 3rd-period update is labelled "End of regulation" *(Team Tracker only)* |
 | **Final score** | **On** | Once when the game ends, **win or lose** — "Mavericks Win!" or "Final: Mavericks 2–3" |
 
@@ -131,7 +134,13 @@ Alerts are deduplicated by game ID within each HA session. The first time a game
 
 **Duplicate goal alerts.** Since v1.12.2 goal and opponent-goal alerts track *which* goals have been announced (period, team and time in the period, with a 15-second tolerance for scorekeeper time corrections) rather than *how many*. A goal that briefly drops out of the feed — pulled for review, deleted and re-entered by the official scorer, or missing because one game-summary fetch failed — is not announced again when it reappears. A goal that is actually disallowed doesn't block the next one, since the next goal has a different time.
 
-**Playoff Tracker** — notifications apply per followed team. If two followed teams are playing simultaneously, the coordinator picks the most relevant single game (LIVE priority over FINAL over PRE) to drive notification state. The same pre-game/goal/final-score logic applies; alerts are keyed per team ID so each followed team's goals and results fire independently. The final-score alert names the winning followed team when there is one, otherwise it reports the followed team's loss. Opponent goal, lead change and end-of-period alerts are not offered for Playoff Tracker entries. The score-accuracy fix applies to the Playoff Tracker as well (goals are matched to teams by abbreviation, since both teams may be followed), and the corrected score is copied onto the live series in the bracket so the bracket and the active game never disagree. The restart/reload protection is the same: a game first seen mid-game or after the final buzzer is baselined without replaying goals or resending the final score, and goals are matched by identity in the same way, so a goal that drops out of the feed and returns isn't announced twice while a goal removed on review doesn't swallow the next goal alert.
+**Disallowed goals.** None of the feeds says outright that a goal was disallowed — HockeyTech simply removes it from the game summary, and the NHL removes it from the landing and play-by-play. A goal also leaves the feed briefly for harmless reasons (the scorer deleting and re-entering it, a failed fetch), so since v1.13.0 a goal is only declared disallowed when **both** feeds agree: it has been missing from the goal list for two consecutive live polls *and* the scoreboard score for that team has gone down. The scoreboard never goes down otherwise, so feed blips and re-timed goals don't trigger the alert. Detection runs whether or not the alert is enabled and fills the `disallowed_goals` attribute. For NHL games the coach's challenge or video review logged in the play-by-play at the time of the goal supplies the reason (goaltender interference, offside, missed stoppage, …) and who challenged; HockeyTech leagues publish no review data, so their alerts say "Taken off the board". A goal that later reappears in the feed is removed from `disallowed_goals` again. Expect the alert roughly 1–2 minutes after the goal comes off (two polls).
+
+**Major incidents.** Classified from the penalty data the integration already fetches, so no extra API calls. Fighting majors at the same time are combined into one "A vs B" line; a major given together with an ejection is reported once, as the ejection; several incidents logged in the same poll share one notification. Plain 10-minute misconducts are not included. HockeyTech penalty shots report the shooter and result; NHL penalty shots are reported when awarded (the penalty that caused them). Fights are common in the ECHL — about one per game — so expect this alert most nights. Injuries can't be tracked: HockeyTech has no injury data and the NHL only logs an anonymous "player injury" stoppage.
+
+Both alerts fire only during live play, never from a game first seen mid-game (existing goals and incidents are baselined like other alerts) or from post-game scoresheet corrections.
+
+**Playoff Tracker** — notifications apply per followed team. If two followed teams are playing simultaneously, the coordinator picks the most relevant single game (LIVE priority over FINAL over PRE) to drive notification state. The same pre-game/goal/final-score logic applies; alerts are keyed per team ID so each followed team's goals and results fire independently. The final-score alert names the winning followed team when there is one, otherwise it reports the followed team's loss. Opponent goal, lead change and end-of-period alerts are not offered for Playoff Tracker entries. Disallowed goal and major incident alerts are offered and cover both teams in the followed team's game. The score-accuracy fix applies to the Playoff Tracker as well (goals are matched to teams by abbreviation, since both teams may be followed), and the corrected score is copied onto the live series in the bracket so the bracket and the active game never disagree. The restart/reload protection is the same: a game first seen mid-game or after the final buzzer is baselined without replaying goals or resending the final score, and goals are matched by identity in the same way, so a goal that drops out of the feed and returns isn't announced twice while a goal removed on review doesn't swallow the next goal alert.
 
 ---
 
@@ -217,6 +226,7 @@ Each configured team creates one sensor entity. The state reflects the current g
 | Attribute | Description |
 |-----------|-------------|
 | `game_events` | List of goals and penalties from the current game, most recent first |
+| `disallowed_goals` | Goals taken off the board during the current game, most recent first — same fields as a goal event with `type: "goal_disallowed"`, plus `reason` (NHL, e.g. `"offside"`, otherwise `null`) and `challenged_by` (challenging team's abbreviation, `"league"`, or `null`). Empty when there's no game |
 
 Each entry in `game_events`:
 
@@ -235,6 +245,7 @@ Each entry in `game_events`:
 | `is_empty_net` | (Goals only) `true` if empty net goal |
 | `description` | (Penalties only) Infraction description |
 | `minutes` | (Penalties only) Penalty duration in minutes |
+| `incident` | (Penalties only) `"fight"`, `"ejection"`, `"major"`, `"penalty_shot"` or `null` for a routine penalty — what the major incident alert keys on |
 
 > Events are populated during live and final games via a second API call. HockeyTech leagues use the `gameSummary` endpoint; NHL uses `gamecenter/{id}/landing`. Pre-game and no-game states return an empty list.
 
@@ -308,6 +319,7 @@ The playoff sensor exposes the same game-level attributes as the Team Tracker se
 | `bracket` | list | Full playoff bracket — list of round objects (see below) |
 | `next_game` | dict | Next upcoming game for any followed team |
 | `game_events` | list | Goals and penalties for the currently active followed-team game |
+| `disallowed_goals` | list | Goals taken off the board in that game (same format as the Team Tracker attribute) |
 
 #### Bracket structure
 
@@ -347,8 +359,8 @@ The large list attributes are excluded from Home Assistant's recorder, so they a
 
 | Sensor | Unrecorded attributes |
 |--------|-----------------------|
-| Team Tracker | `game_events`, `last_game_events`, `recent_games` |
-| Playoff Tracker | `game_events`, `bracket` |
+| Team Tracker | `game_events`, `last_game_events`, `recent_games`, `disallowed_goals` |
+| Playoff Tracker | `game_events`, `bracket`, `disallowed_goals` |
 
 They are still present on the live entity, so the card, templates, and automations see them as usual. The sensor state (`PRE` / `LIVE` / `FINAL` / `NO_GAME`) and all other attributes (score, period, clock, teams, next/last game fields, etc.) are recorded normally, so history graphs and the logbook keep working.
 
@@ -408,6 +420,9 @@ Fixed in v1.10.0 — in-game alert state is baselined the first time a game is s
 
 **Same goal announced twice**
 Fixed in v1.12.2 — the HockeyTech/NHL feeds sometimes drop a goal for a minute or two (review, scorer re-entering it, or a failed fetch) and then restore it. Goals are now matched by period/team/time, so the returning goal is recognised. See *Duplicate goal alerts* under [Notifications](#notifications).
+
+**Got a "goal disallowed" alert but the goal counted**
+The alert needs the goal missing from the goal list for two polls *and* the scoreboard score going down, so this should be rare. If a goal returns to the feed afterwards it is dropped from `disallowed_goals`, but the alert can't be unsent. Download diagnostics while the game is live and open an issue.
 
 **Goal alert showed the old score**
 Fixed in v1.10.0 — see *Score accuracy* under [Notifications](#notifications).

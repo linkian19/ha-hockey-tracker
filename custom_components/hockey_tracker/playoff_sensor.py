@@ -25,7 +25,7 @@ class PlayoffSensor(CoordinatorEntity[PlayoffCoordinator], SensorEntity):
     _attr_attribution = ATTRIBUTION
     _attr_has_entity_name = False
     # Large list attributes stay live for the card but are kept out of recorder history
-    _unrecorded_attributes = frozenset({"game_events", "bracket"})
+    _unrecorded_attributes = frozenset({"game_events", "bracket", "disallowed_goals"})
 
     def __init__(self, coordinator: PlayoffCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator)
@@ -65,6 +65,7 @@ class PlayoffSensor(CoordinatorEntity[PlayoffCoordinator], SensorEntity):
             attrs[key] = data.get(key)
 
         attrs["game_events"] = data.get("game_events", [])
+        attrs["disallowed_goals"] = data.get("disallowed_goals", [])
         attrs["next_game"] = data.get("next_game")
 
         # Playoff-specific attributes

@@ -8,11 +8,15 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
-from .base_coordinator import GoalKey, HockeyBaseCoordinator, take_new_goals
+from .base_coordinator import GoalKey, HockeyBaseCoordinator, take_new, take_new_goals
 from .const import (
     CONF_FOLLOWED_TEAMS,
+    CONF_NOTIFY_DISALLOWED_ENABLED,
+    CONF_NOTIFY_DISALLOWED_TARGETS,
     CONF_NOTIFY_GOAL_ENABLED,
     CONF_NOTIFY_GOAL_TARGETS,
+    CONF_NOTIFY_INCIDENT_ENABLED,
+    CONF_NOTIFY_INCIDENT_TARGETS,
     CONF_NOTIFY_PREGAME_ENABLED,
     CONF_NOTIFY_PREGAME_TARGETS,
     CONF_NOTIFY_WIN_ENABLED,
@@ -39,6 +43,17 @@ from .const import (
     SCHEDULE_CACHE_TTL,
 )
 from .coordinator import _to_int, reconcile_scores
+from .incidents import (
+    DisallowedGoalTracker,
+    classify_ht_penalty,
+    classify_nhl_penalty,
+    collect_incidents,
+    disallowed_reason_text,
+    format_incidents,
+    ht_penalty_shots,
+    incident_key,
+    nhl_reviews,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -71,6 +86,10 @@ class PlayoffCoordinator(HockeyBaseCoordinator):
         self._notif_win_sent: dict[str, str] = {}        # team_id → game_id
         self._notif_goals_announced: dict[str, list[GoalKey]] = {}  # team_id → announced goals
         self._notif_goal_game_id: dict[str, str] = {}    # team_id → game_id
+        # Incidents and disallowed goals cover both teams, so they're kept per game
+        self._notif_incident_game_id: str | None = None
+        self._notif_incidents_announced: list[tuple] = []
+        self._disallowed: dict[str, DisallowedGoalTracker] = {}  # game_id → tracker
 
     def clear_schedule_cache(self) -> None:
         self._bracket_cache = None
@@ -93,6 +112,7 @@ class PlayoffCoordinator(HockeyBaseCoordinator):
         return await self._fetch_ht_playoffs()
 
     async def _async_process(self, data: dict[str, Any]) -> dict[str, Any]:
+        self._track_disallowed(data)
         await self._maybe_notify(data)
 
         # Manage post-game FINAL display window (mirrors HockeyCoordinator).
@@ -112,7 +132,7 @@ class PlayoffCoordinator(HockeyBaseCoordinator):
                         "game_id", "start_time", "period", "clock",
                         "home_team", "home_team_id", "home_score", "home_shots", "home_logo_url",
                         "away_team", "away_team_id", "away_score", "away_shots", "away_logo_url",
-                        "is_home", "team_logo_url", "venue", "game_events",
+                        "is_home", "team_logo_url", "venue", "game_events", "disallowed_goals",
                     )
                 }
             elif self._game_final_at and (
@@ -447,6 +467,7 @@ class PlayoffCoordinator(HockeyBaseCoordinator):
             "team_logo_url": self._nhl_logo(tracked),
             "venue": game.get("venue", {}).get("default"),
             "game_events": self._nhl_extract_events(landing, playbyplay) if landing else [],
+            "_reviews": nhl_reviews(playbyplay, home_abbrev, away_abbrev),
         }
         return reconcile_scores(result, by_abbrev=True)
 
@@ -563,6 +584,7 @@ class PlayoffCoordinator(HockeyBaseCoordinator):
                     "player_number": player.get("sweaterNumber"),
                     "description": pen.get("descKey", "").replace("-", " ").title(),
                     "minutes": pen.get("duration"),
+                    "incident": classify_nhl_penalty(pen.get("type"), pen.get("descKey")),
                 })
         if playbyplay:
             away_id = playbyplay.get("awayTeam", {}).get("id")
@@ -945,6 +967,9 @@ class PlayoffCoordinator(HockeyBaseCoordinator):
             "team_logo_url": self._logo_cache.get(tracked),
             "venue": game.get("venue_name"),
             "game_events": self._ht_extract_events(summary) if summary else [],
+            "_penalty_shots": (
+                ht_penalty_shots(summary, lambda t: t in self.followed_team_ids) if summary else []
+            ),
         }
         return reconcile_scores(result, by_abbrev=True)
 
@@ -1018,6 +1043,7 @@ class PlayoffCoordinator(HockeyBaseCoordinator):
                     "player_number": player.get("jerseyNumber"),
                     "description": pen.get("description", ""),
                     "minutes": pen.get("minutes"),
+                    "incident": classify_ht_penalty(pen.get("description"), pen.get("minutes")),
                 })
         events.sort(key=lambda e: (e.get("period", 0), self._time_to_sec(e.get("time", "0:00"))), reverse=True)
         return events
@@ -1103,6 +1129,35 @@ class PlayoffCoordinator(HockeyBaseCoordinator):
     # Notifications
     # ------------------------------------------------------------------
 
+    def _track_disallowed(self, data: dict) -> None:
+        """Update disallowed-goal tracking; sets disallowed_goals and _new_disallowed."""
+        game_id = str(data.get("game_id") or "")
+        if not game_id:
+            data["disallowed_goals"] = []
+            data["_new_disallowed"] = []
+            return
+        tracker = self._disallowed.get(game_id)
+        if tracker is None:
+            # Two followed teams can play at once; keep a few games, drop the oldest
+            while len(self._disallowed) >= 4:
+                self._disallowed.pop(next(iter(self._disallowed)))
+            tracker = self._disallowed[game_id] = DisallowedGoalTracker()
+        home_abbrev = data.get("home_team_abbrev") or data.get("home_team_id")
+        away_abbrev = data.get("away_team_abbrev") or data.get("away_team_id")
+        feed = data.get("_feed_scores") or {
+            "home": _to_int(data.get("home_score")), "away": _to_int(data.get("away_score")),
+        }
+
+        def _side(goal: dict) -> str | None:
+            abbrev = goal.get("team_abbrev")
+            return "home" if abbrev == home_abbrev else "away" if abbrev == away_abbrev else None
+
+        goals = [e for e in data.get("game_events") or [] if e.get("type") == "goal"]
+        data["_new_disallowed"] = tracker.update(
+            game_id, data.get("game_state") == GAME_STATE_LIVE, goals, feed, _side, data.get("_reviews"),
+        )
+        data["disallowed_goals"] = tracker.goals
+
     async def _maybe_notify(self, data: dict) -> None:
         opts = self._notif_opts()
         state = data.get("game_state")
@@ -1142,6 +1197,35 @@ class PlayoffCoordinator(HockeyBaseCoordinator):
 
         if state not in (GAME_STATE_PRE, GAME_STATE_LIVE, GAME_STATE_FINAL) or not game_id:
             return
+
+        def _enabled(key_enabled: str, key_targets: str) -> list[str]:
+            if not opts.get(key_enabled, NOTIFY_ENABLED_DEFAULTS[key_enabled]):
+                return []
+            return self._parse_targets(opts.get(key_targets, []))
+
+        # Incidents: baseline the first time a game is seen, then announce new ones live
+        if self._notif_incident_game_id != game_id:
+            self._notif_incident_game_id = game_id
+            self._notif_incidents_announced = []
+            take_new(collect_incidents(data), self._notif_incidents_announced, incident_key)
+        elif state == GAME_STATE_LIVE:
+            incidents = take_new(collect_incidents(data), self._notif_incidents_announced, incident_key)
+            targets = _enabled(CONF_NOTIFY_INCIDENT_ENABLED, CONF_NOTIFY_INCIDENT_TARGETS) if incidents else []
+            if targets:
+                title, msg = format_incidents(incidents)
+                await self._send_notifications(targets, title, msg)
+
+        # Disallowed goals (either team) — the tracker never flags on its first poll
+        disallowed = (data.get("_new_disallowed") or []) if state == GAME_STATE_LIVE else []
+        targets = _enabled(CONF_NOTIFY_DISALLOWED_ENABLED, CONF_NOTIFY_DISALLOWED_TARGETS) if disallowed else []
+        for goal in disallowed if targets else []:
+            team = team_name_by_abbrev.get(goal.get("team_abbrev", "")) or goal.get("team_abbrev", "")
+            tag = " (PP)" if goal.get("is_power_play") else " (SH)" if goal.get("is_short_handed") else " (EN)" if goal.get("is_empty_net") else ""
+            msg = f"{goal.get('player_name', '')}{tag} — P{goal.get('period', '')} {goal.get('time', '')}"
+            msg += f" · {disallowed_reason_text(goal)}"
+            if our_score is not None and opp_score is not None:
+                msg += f" | {our_score}–{opp_score}"
+            await self._send_notifications(targets, f"{team} goal disallowed", msg)
 
         our_goals = [e for e in data.get("game_events", []) if e.get("type") == "goal" and e.get("is_tracked_team")]
         if self._notif_goal_game_id.get(our_id) != game_id:
