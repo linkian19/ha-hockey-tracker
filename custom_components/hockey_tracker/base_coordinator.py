@@ -8,6 +8,7 @@ subclasses because it genuinely differs (one team vs. a set of followed teams).
 from __future__ import annotations
 
 from abc import abstractmethod
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 import json
 import logging
@@ -41,46 +42,60 @@ GOAL_MATCH_TOLERANCE_SECONDS = 15
 GoalKey = tuple[int, str, int]  # (period, team_abbrev, seconds into period)
 
 
-def _goal_key(goal: dict) -> GoalKey:
+def time_to_seconds(value: Any) -> int:
+    """Seconds into the period for an "MM:SS" clock string (0 if unparseable)."""
+    parts = str(value or "").split(":")
     try:
-        period = int(goal.get("period") or 0)
-    except (TypeError, ValueError):
-        period = 0
-    parts = str(goal.get("time") or "").split(":")
-    try:
-        seconds = int(parts[0]) * 60 + int(parts[1]) if len(parts) == 2 else 0
+        return int(parts[0]) * 60 + int(parts[1]) if len(parts) == 2 else 0
     except ValueError:
-        seconds = 0
-    return (period, str(goal.get("team_abbrev") or ""), seconds)
+        return 0
 
 
-def take_new_goals(goals: list[dict], announced: list[GoalKey]) -> list[dict]:
-    """Return the goals not yet announced and record them in `announced`.
+def _period(item: dict) -> int:
+    try:
+        return int(item.get("period") or 0)
+    except (TypeError, ValueError):
+        return 0
 
-    Goals are matched by identity (period, team, time) rather than by count, so a
-    goal that briefly drops out of the feed — removed for review, deleted and
-    re-entered by the scorekeeper, or a failed summary fetch returning no events —
-    isn't announced again when it reappears. Each announced key absorbs at most one
-    goal, so distinct goals logged at the same time (e.g. NHL shootout goals at
-    00:00) still count separately. `announced` is never pruned for a game.
+
+def _goal_key(goal: dict) -> GoalKey:
+    return (_period(goal), str(goal.get("team_abbrev") or ""), time_to_seconds(goal.get("time")))
+
+
+def take_new(items: list[dict], announced: list[tuple], key_fn: Callable[[dict], tuple]) -> list[dict]:
+    """Return the items not yet announced and record their keys in `announced`.
+
+    Keys are tuples whose last element is seconds into the period. Two items match
+    when every other element is equal and the times are within
+    GOAL_MATCH_TOLERANCE_SECONDS, so an item that briefly drops out of the feed —
+    removed for review, deleted and re-entered by the scorekeeper, or a failed
+    summary fetch returning no events — isn't announced again when it reappears.
+    Each announced key absorbs at most one item, so distinct items logged at the
+    same time (e.g. NHL shootout goals at 00:00) still count separately.
+    `announced` is never pruned for a game.
     """
     available = list(announced)
     new: list[dict] = []
-    # Oldest first so the earliest goals claim the closest announced keys
-    for goal in sorted(goals, key=_goal_key):
-        period, team, seconds = _goal_key(goal)
+    # Oldest first so the earliest items claim the closest announced keys
+    for item in sorted(items, key=key_fn):
+        key = key_fn(item)
         candidates = [
             k for k in available
-            if k[0] == period and k[1] == team and abs(k[2] - seconds) <= GOAL_MATCH_TOLERANCE_SECONDS
+            if k[:-1] == key[:-1] and abs(k[-1] - key[-1]) <= GOAL_MATCH_TOLERANCE_SECONDS
         ]
         if candidates:
-            available.remove(min(candidates, key=lambda k: abs(k[2] - seconds)))
+            available.remove(min(candidates, key=lambda k: abs(k[-1] - key[-1])))
         else:
-            new.append(goal)
-    announced.extend(_goal_key(g) for g in new)
+            new.append(item)
+    announced.extend(key_fn(i) for i in new)
     # Callers expect newest-first, matching game_events ordering
-    new.sort(key=_goal_key, reverse=True)
+    new.sort(key=key_fn, reverse=True)
     return new
+
+
+def take_new_goals(goals: list[dict], announced: list[GoalKey]) -> list[dict]:
+    """take_new() for goal events, matched by (period, team, time)."""
+    return take_new(goals, announced, _goal_key)
 
 
 class HockeyBaseCoordinator(DataUpdateCoordinator[dict[str, Any]]):

@@ -11,14 +11,18 @@ from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.helpers.event import async_track_time_change
 from homeassistant.util import dt as dt_util
 
-from .base_coordinator import GoalKey, HockeyBaseCoordinator, take_new_goals
+from .base_coordinator import GoalKey, HockeyBaseCoordinator, take_new, take_new_goals
 from .const import (
     AHL_GAME_URL,
+    CONF_NOTIFY_DISALLOWED_ENABLED,
+    CONF_NOTIFY_DISALLOWED_TARGETS,
     CONF_NOTIFY_GAMEDAY_ENABLED,
     CONF_NOTIFY_GAMEDAY_TARGETS,
     CONF_NOTIFY_GAMEDAY_TIME,
     CONF_NOTIFY_GOAL_ENABLED,
     CONF_NOTIFY_GOAL_TARGETS,
+    CONF_NOTIFY_INCIDENT_ENABLED,
+    CONF_NOTIFY_INCIDENT_TARGETS,
     CONF_NOTIFY_LEAD_ENABLED,
     CONF_NOTIFY_LEAD_TARGETS,
     CONF_NOTIFY_OPP_GOAL_ENABLED,
@@ -59,6 +63,17 @@ from .const import (
     SCAN_INTERVAL_PRE,
     SCHEDULE_CACHE_TTL,
 )
+from .incidents import (
+    DisallowedGoalTracker,
+    classify_ht_penalty,
+    classify_nhl_penalty,
+    collect_incidents,
+    disallowed_reason_text,
+    format_incidents,
+    ht_penalty_shots,
+    incident_key,
+    nhl_reviews,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -83,7 +98,11 @@ def reconcile_scores(data: dict, by_abbrev: bool = False) -> dict:
     by_abbrev=True via team_abbrev against home/away_team_abbrev (playoff
     tracker, where both teams can be followed). If the abbreviations don't
     account for every goal the scores are left untouched.
+
+    The scoreboard's own numbers are kept in _feed_scores for disallowed-goal
+    detection, which needs to see the score go down.
     """
+    data["_feed_scores"] = {"home": _to_int(data.get("home_score")), "away": _to_int(data.get("away_score"))}
     goals = [e for e in data.get("game_events") or [] if e.get("type") == "goal"]
     if not goals:
         return data
@@ -153,6 +172,8 @@ class HockeyCoordinator(HockeyBaseCoordinator):
         self._notif_opp_goals_announced: list[GoalKey] = []
         self._notif_lead: str | None = None  # "us" | "them" | "tied"
         self._notif_period_sent: int = 0
+        self._notif_incidents_announced: list[tuple] = []
+        self._disallowed = DisallowedGoalTracker()
         # Game-day reminder: daily timer at the configured local time, plus the
         # local date it last fired so re-arming the timer can't send it twice.
         self._gameday_unsub: CALLBACK_TYPE | None = None
@@ -180,6 +201,7 @@ class HockeyCoordinator(HockeyBaseCoordinator):
         return await self._fetch_hockeytech()
 
     async def _async_process(self, data: dict[str, Any]) -> dict[str, Any]:
+        self._track_disallowed(data)
         # Fire notifications before any state transitions so win/goal
         # alerts fire the first time FINAL/goals are seen.
         await self._maybe_notify(data)
@@ -510,6 +532,7 @@ class HockeyCoordinator(HockeyBaseCoordinator):
             "venue": game.get("venue_name"),
             "game_url": self._ht_game_url(game, str(game_id)) if game_id else None,
             "game_events": self._ht_extract_events(summary) if summary else [],
+            "_penalty_shots": ht_penalty_shots(summary, lambda t: t == self.team_id) if summary else [],
         }
         return reconcile_scores(result)
 
@@ -616,6 +639,7 @@ class HockeyCoordinator(HockeyBaseCoordinator):
                     "player_number": player.get("jerseyNumber"),
                     "description": pen.get("description", ""),
                     "minutes": pen.get("minutes"),
+                    "incident": classify_ht_penalty(pen.get("description"), pen.get("minutes")),
                 })
 
         events.sort(key=_event_sort_key, reverse=True)
@@ -808,6 +832,7 @@ class HockeyCoordinator(HockeyBaseCoordinator):
             "venue": game.get("venue", {}).get("default"),
             "game_url": NHL_GAME_URL.format(game_id=game_id) if game_id else None,
             "game_events": self._nhl_extract_events(landing, playbyplay) if landing else [],
+            "_reviews": nhl_reviews(playbyplay, home.get("abbrev", ""), away.get("abbrev", "")),
         }
         return reconcile_scores(result)
 
@@ -868,6 +893,7 @@ class HockeyCoordinator(HockeyBaseCoordinator):
                     "player_number": player.get("sweaterNumber"),
                     "description": desc_key.replace("-", " ").title(),
                     "minutes": pen.get("duration"),
+                    "incident": classify_nhl_penalty(pen.get("type"), desc_key),
                 })
 
         if playbyplay:
@@ -935,6 +961,28 @@ class HockeyCoordinator(HockeyBaseCoordinator):
     # Notifications
     # ------------------------------------------------------------------
 
+    def _track_disallowed(self, data: dict) -> None:
+        """Update disallowed-goal tracking; sets disallowed_goals and _new_disallowed."""
+        game_id = str(data.get("game_id") or "")
+        if not game_id:
+            data["disallowed_goals"] = []
+            data["_new_disallowed"] = []
+            return
+        is_home = bool(data.get("is_home"))
+        feed = data.get("_feed_scores") or {
+            "home": _to_int(data.get("home_score")), "away": _to_int(data.get("away_score")),
+        }
+        goals = [e for e in data.get("game_events") or [] if e.get("type") == "goal"]
+        data["_new_disallowed"] = self._disallowed.update(
+            game_id,
+            data.get("game_state") == GAME_STATE_LIVE,
+            goals,
+            feed,
+            lambda g: "home" if bool(g.get("is_tracked_team")) == is_home else "away",
+            data.get("_reviews"),
+        )
+        data["disallowed_goals"] = self._disallowed.goals
+
     async def _maybe_notify(self, data: dict) -> None:
         """Fire HA notify services for pre-game, goal, lead, period, and final-score events."""
         opts = self._notif_opts()
@@ -992,6 +1040,8 @@ class HockeyCoordinator(HockeyBaseCoordinator):
             self._notif_opp_goals_announced = []
             take_new_goals(our_goals, self._notif_goals_announced)
             take_new_goals(opp_goals, self._notif_opp_goals_announced)
+            self._notif_incidents_announced = []
+            take_new(collect_incidents(data), self._notif_incidents_announced, incident_key)
             self._notif_lead = lead
             self._notif_period_sent = period if in_intermission else max(period - 1, 0)
             if state == GAME_STATE_FINAL:
@@ -1015,6 +1065,23 @@ class HockeyCoordinator(HockeyBaseCoordinator):
             for goal in new_goals if targets else []:
                 msg = self._goal_line(goal) + (f" | {our_score}–{opp_score}" if lead else "")
                 await self._send_notifications(targets, f"{opp_team} scores", msg)
+
+            # Disallowed goal notification (either team)
+            disallowed = data.get("_new_disallowed") or []
+            targets = _enabled(CONF_NOTIFY_DISALLOWED_ENABLED, CONF_NOTIFY_DISALLOWED_TARGETS) if disallowed else []
+            for goal in disallowed if targets else []:
+                team = our_team if goal.get("is_tracked_team") else opp_team
+                msg = f"{self._goal_line(goal)} · {disallowed_reason_text(goal)}"
+                if lead:
+                    msg += f" | {our_score}–{opp_score}"
+                await self._send_notifications(targets, f"{team} goal disallowed", msg)
+
+            # Major incident notification (fights, ejections, majors, penalty shots)
+            incidents = take_new(collect_incidents(data), self._notif_incidents_announced, incident_key)
+            targets = _enabled(CONF_NOTIFY_INCIDENT_ENABLED, CONF_NOTIFY_INCIDENT_TARGETS) if incidents else []
+            if targets:
+                title, msg = format_incidents(incidents)
+                await self._send_notifications(targets, title, msg)
 
             # Lead change / tie notification
             if lead is not None and lead != self._notif_lead:

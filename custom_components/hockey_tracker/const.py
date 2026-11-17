@@ -142,6 +142,10 @@ CONF_NOTIFY_PERIOD_TARGETS = "notify_period_targets"
 CONF_NOTIFY_GAMEDAY_ENABLED = "notify_gameday_enabled"
 CONF_NOTIFY_GAMEDAY_TARGETS = "notify_gameday_targets"
 CONF_NOTIFY_GAMEDAY_TIME = "notify_gameday_time"
+CONF_NOTIFY_DISALLOWED_ENABLED = "notify_disallowed_enabled"
+CONF_NOTIFY_DISALLOWED_TARGETS = "notify_disallowed_targets"
+CONF_NOTIFY_INCIDENT_ENABLED = "notify_incident_enabled"
+CONF_NOTIFY_INCIDENT_TARGETS = "notify_incident_targets"
 
 # Local time the game-day reminder goes out when no time has been chosen
 DEFAULT_GAMEDAY_TIME = "09:00:00"
@@ -155,6 +159,8 @@ NOTIFY_ENABLED_DEFAULTS = {
     CONF_NOTIFY_LEAD_ENABLED: False,
     CONF_NOTIFY_PERIOD_ENABLED: True,
     CONF_NOTIFY_GAMEDAY_ENABLED: False,
+    CONF_NOTIFY_DISALLOWED_ENABLED: False,
+    CONF_NOTIFY_INCIDENT_ENABLED: False,
 }
 
 # Polling intervals (seconds)
