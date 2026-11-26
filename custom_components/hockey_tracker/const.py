@@ -150,6 +150,11 @@ CONF_NOTIFY_INCIDENT_TARGETS = "notify_incident_targets"
 # Local time the game-day reminder goes out when no time has been chosen
 DEFAULT_GAMEDAY_TIME = "09:00:00"
 
+# Companion-app (Android) notification channel and group for every alert, so hockey
+# notifications can be muted, sounded or prioritised separately from other HA alerts.
+NOTIFY_CHANNEL = "Hockey"
+NOTIFY_GROUP = "hockey_tracker"
+
 # Defaults for the enable toggles (a type still needs targets before it sends anything)
 NOTIFY_ENABLED_DEFAULTS = {
     CONF_NOTIFY_WIN_ENABLED: True,

@@ -178,6 +178,18 @@ async def test_notification_retries_without_data(hass: HomeAssistant, team_entry
     assert "data" not in calls[0].data
 
 
+async def test_notification_channel_and_group(hass: HomeAssistant, team_entry) -> None:
+    """Every alert carries the Hockey channel/group; a per-call tag is kept."""
+    calls = _register_notify(hass)
+    team_entry.add_to_hass(hass)
+    coord = HockeyCoordinator(hass, team_entry)
+    await coord._send_notifications(["notify.mobile_app_phone"], "T", "M")
+    await coord._send_notifications(["notify.mobile_app_phone"], "T", "M", data={"tag": "x"})
+    await hass.async_block_till_done()
+    assert calls[0].data["data"] == {"channel": "Hockey", "group": "hockey_tracker"}
+    assert calls[1].data["data"] == {"channel": "Hockey", "group": "hockey_tracker", "tag": "x"}
+
+
 async def test_playoff_entry_setup(hass: HomeAssistant) -> None:
     entry = MockConfigEntry(
         domain=DOMAIN, title="ECHL Playoffs (Kansas City Mavericks)", version=1, minor_version=2,

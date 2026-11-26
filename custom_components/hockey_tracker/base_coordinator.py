@@ -28,6 +28,8 @@ from .const import (
     HOCKEYTECH_BASE,
     HOCKEYTECH_LEAGUES,
     NHL_API_BASE,
+    NOTIFY_CHANNEL,
+    NOTIFY_GROUP,
     SCAN_INTERVAL_IDLE,
 )
 
@@ -286,7 +288,9 @@ class HockeyBaseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             domain = parts[0] if len(parts) == 2 else "notify"
             service_name = parts[1] if len(parts) == 2 else parts[0]
             payload = {"title": title, "message": message}
-            attempts = [{**payload, "data": data}, payload] if data else [payload]
+            # Channel/group go on every alert; per-call keys (e.g. the score tag) win.
+            full_data = {"channel": NOTIFY_CHANNEL, "group": NOTIFY_GROUP, **(data or {})}
+            attempts = [{**payload, "data": full_data}, payload]
             last_err: Exception | None = None
             for attempt in attempts:
                 try:
